@@ -765,7 +765,7 @@ def browser_doctor() -> str:
     report = MANAGER.doctor()
     report["config"] = {
         "max_actions": CONFIG.max_actions,
-        "window": list(CONFIG.window),
+        "window": list(CONFIG.window) if CONFIG.window else "auto",
         "profile": str(CONFIG.resolved_profile()),
         "macros_dir": str(CONFIG.macros_dir()),
         # Which API is configured, not merely whether a key exists. The two providers are

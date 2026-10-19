@@ -676,7 +676,7 @@ All optional; the defaults are the point.
 | No | `JEVMCP_HEADLESS` | `1` | `0` for a visible window |
 | No | `JEVMCP_FOREGROUND` | `0` | `1` activates the owned tab |
 | No | `JEVMCP_SANDBOX` | `auto` | `auto` retries with `--no-sandbox` if the browser aborts on startup |
-| No | `JEVMCP_WINDOW` | `1280x860` | browser window size |
+| No | `JEVMCP_WINDOW` | `auto` when the window is visible or `mode=attach`, otherwise `1280x860` | `WIDTHxHEIGHT` locks the layout viewport; `auto` lets the page fill the window |
 | No | `JEVMCP_PROFILE_DIR` | `~/.jev-ultrafast-mcp/chrome-profile` | persistent profile — log in once, stay logged in |
 | No | `JEVMCP_ALLOW_DOMAINS` | *(all)* | comma-separated; navigation elsewhere is refused |
 | No | `JEVMCP_DENY_DOMAINS` | *(none)* | comma-separated blocklist |

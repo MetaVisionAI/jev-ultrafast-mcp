@@ -621,7 +621,7 @@ decisions 路由）。给了 `verify` 检查时返回 `verified: PASS/FAIL`。
 | 否 | `JEVMCP_HEADLESS` | `1` | `0` 显示窗口 |
 | 否 | `JEVMCP_FOREGROUND` | `0` | `1` 激活自有标签页 |
 | 否 | `JEVMCP_SANDBOX` | `auto` | 浏览器启动即崩时，`auto` 会用 `--no-sandbox` 重试 |
-| 否 | `JEVMCP_WINDOW` | `1280x860` | 浏览器窗口尺寸 |
+| 否 | `JEVMCP_WINDOW` | 有界面或 `mode=attach` 时为 `auto`，否则 `1280x860` | `宽x高` 锁定布局视口；`auto` 让页面铺满窗口 |
 | 否 | `JEVMCP_PROFILE_DIR` | `~/.jev-ultrafast-mcp/chrome-profile` | 持久化 profile —— 手动登录一次，之后一直保持 |
 | 否 | `JEVMCP_ALLOW_DOMAINS` | *（不限）* | 逗号分隔；导航到其他域名会被拒绝 |
 | 否 | `JEVMCP_DENY_DOMAINS` | *（无）* | 逗号分隔黑名单 |

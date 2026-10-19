@@ -50,6 +50,37 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+# The layout viewport a headless browser gets when nobody named a size. A headed
+# window, and a browser we only attach to, do not use it: the page fills whatever
+# window is actually on screen.
+DEFAULT_WINDOW = (1280, 860)
+
+
+def parse_window(raw: str | None, *, headless: bool, mode: str) -> tuple[int, int] | None:
+    """Return a locked viewport, or None when the page should fill the window.
+
+    None is the default for a visible browser and for attach mode, because the
+    window size belongs to the screen in front of the user. Headless has no such
+    window, so an unset value stays `DEFAULT_WINDOW`. `auto` always fills.
+    A malformed value falls back to `DEFAULT_WINDOW` rather than refusing to start.
+    """
+    if raw is None:
+        if mode == "attach" or not headless:
+            return None
+        return DEFAULT_WINDOW
+    text = raw.strip().lower()
+    if text in {"auto", "full", "100%"}:
+        return None
+    try:
+        width_text, height_text = text.split("x", 1)
+        width, height = int(width_text), int(height_text)
+    except ValueError:
+        return DEFAULT_WINDOW
+    if width <= 0 or height <= 0:
+        return DEFAULT_WINDOW
+    return (width, height)
+
+
 def chrome_data_dirs() -> list[Path]:
     """Where a Chromium-family browser keeps `DevToolsActivePort`.
 
@@ -289,7 +320,10 @@ class Config:
     sandbox: str = "auto"                 # auto | on | off
     profile_dir: Path | None = None
     attach_profile_dir: Path | None = None  # data dir of the browser we attach to
-    window: tuple[int, int] = (1280, 860)
+    # None means the page fills the window. A pair locks the layout viewport to
+    # those CSS pixels, which is what a headless browser needs and what an
+    # explicit JEVMCP_WINDOW=1280x860 asks for.
+    window: tuple[int, int] | None = (1280, 860)
     max_actions: int = 250
     max_text: int = 6000
     state_dir: Path = field(default_factory=lambda: Path.home() / ".jev-ultrafast-mcp")
@@ -332,23 +366,20 @@ class Config:
         turbo_endpoint = provider_endpoint(provider)
         turbo_key = _provider_key(provider)
         text_base, text_key, text_model = _text_backend(provider, turbo_key)
-        window = os.environ.get("JEVMCP_WINDOW", "1280x860")
-        try:
-            w, h = (int(part) for part in window.lower().split("x", 1))
-        except Exception:  # noqa: BLE001 - a malformed JEVMCP_WINDOW falls back, it does not refuse
-            w, h = 1280, 860
+        headless = _env_bool("JEVMCP_HEADLESS", True)
+        mode = os.environ.get("JEVMCP_MODE", "launch")
         return cls(
             chrome=os.environ.get("JEVMCP_CHROME"),
-            mode=os.environ.get("JEVMCP_MODE", "launch"),
+            mode=mode,
             cdp_url=os.environ.get("JEVMCP_CDP_URL"),
-            headless=_env_bool("JEVMCP_HEADLESS", True),
+            headless=headless,
             foreground=_env_bool("JEVMCP_FOREGROUND", False),
             sandbox=os.environ.get("JEVMCP_SANDBOX", "auto"),
             profile_dir=Path(profile).expanduser() if profile else None,
             attach_profile_dir=(
                 Path(attach_profile).expanduser() if attach_profile else None
             ),
-            window=(w, h),
+            window=parse_window(os.environ.get("JEVMCP_WINDOW"), headless=headless, mode=mode),
             max_actions=int(os.environ.get("JEVMCP_MAX_ACTIONS", "250")),
             max_text=int(os.environ.get("JEVMCP_MAX_TEXT", "6000")),
             state_dir=Path(

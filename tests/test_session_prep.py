@@ -40,6 +40,7 @@ SETUP_METHODS = {
     "Runtime.enable",
     "Network.enable",
     "Emulation.setDeviceMetricsOverride",
+    "Emulation.clearDeviceMetricsOverride",
     "Emulation.setFocusEmulationEnabled",
     "Page.addScriptToEvaluateOnNewDocument",
 }
@@ -147,6 +148,46 @@ def test_the_setup_is_applied_at_the_configured_window_size():
     metrics = [p for m, p in driver.setup_calls() if m == "Emulation.setDeviceMetricsOverride"]
     assert len(metrics) == 1
     assert (metrics[0]["width"], metrics[0]["height"]) == (1024, 768)
+    assert not [m for m, _ in driver.setup_calls() if m == "Emulation.clearDeviceMetricsOverride"]
+
+
+def test_an_unlocked_window_clears_a_viewport_override_instead_of_setting_one():
+    """`window is None` means the page fills the window, including one we already shrank.
+
+    Chrome keeps a device-metrics override on the target. Attaching again without
+    clearing it would leave the page at 1280x860 inside a window the user has
+    since made larger, which is the frame this setting exists to remove.
+    """
+    session, driver = _session(window=None)
+    session.start()
+    driver.calls.clear()
+    session.switch_tab(target_id="tab-b")
+
+    methods = [m for m, _ in driver.setup_calls()]
+    assert methods.count("Emulation.clearDeviceMetricsOverride") == 1
+    assert "Emulation.setDeviceMetricsOverride" not in methods
+
+
+def test_a_wheel_on_an_unlocked_window_uses_the_page_size():
+    """The wheel has to land on the page, not on the centre of a size we no longer set."""
+    session, driver = _session(window=None)
+    session.start()
+    driver.events = []
+
+    def evaluate(expression, session_id, **kwargs):
+        driver.calls.append(("Runtime.evaluate", {"session_id": session_id, "expression": expression}))
+        if "innerWidth" in expression:
+            return [1600, 1000]
+        if "readyState" in expression:
+            return "complete"
+        return HELPER_VERSION
+
+    driver.evaluate = evaluate
+    session._run_op({"op": "scroll", "dir": "down", "amount": 100}, dry_run=False)
+
+    wheels = [p for m, p in driver.calls if m == "Input.dispatchMouseEvent" and p.get("type") == "mouseWheel"]
+    assert len(wheels) == 1
+    assert (wheels[0]["x"], wheels[0]["y"]) == (800, 500)
 
 
 def test_switching_tabs_does_not_bring_a_window_to_the_front():
