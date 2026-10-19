@@ -26,7 +26,7 @@
   // satisfied, the server re-injected this whole file on every observation, and
   // a page holding the older helper was never actually upgraded, because the
   // early return fired on the number it already carried.
-  const VERSION = 8;
+  const VERSION = 10;
   try { if (W !== W.top) return; } catch (_) { return; }
   if (W.__jevMcp && W.__jevMcp.version === VERSION) return;
 
@@ -59,6 +59,50 @@
   const SECONDARY = new Set(['option', 'tab', 'menuitem', 'menuitemcheckbox',
     'menuitemradio', 'treeitem', 'gridcell', 'radio', 'checkbox', 'switch']);
 
+  // Site strategies add controls a page paints without a native tag or an ARIA
+  // role. A host that matches none of them keeps the SELECTOR above and nothing
+  // else. Roles stay inside ROLES so the decision model already knows the op.
+  const hostEnds = (host, suffix) => host === suffix || host.endsWith('.' + suffix);
+  const STRATEGIES = [{
+    name: 'feishu',
+    match: loc => {
+      const host = String((loc && loc.hostname) || '').toLowerCase();
+      return hostEnds(host, 'feishu.cn') || hostEnds(host, 'feishu.net')
+        || hostEnds(host, 'larksuite.com') || hostEnds(host, 'larkoffice.com');
+    },
+    // Taken from a logged-in session (tests/fixtures/feishu): the sidebar row,
+    // the calendar's create button, a day cell, a week-grid time label, a time
+    // option, and an attendee search row. All of them are plain divs.
+    selector: [
+      '.navbarMenu',
+      '.add-new-event-btn',
+      '.larkc-dayPanel-date',
+      '.calendar-timeline-slot',
+      '.virtual-list-options._hour-select ._option',
+      '.attendee-search-item',
+      // These inputs omit `type`, so the generic collector (which trusts the
+      // attribute, not the HTML default of text) never sees them.
+      '.participants input',
+      '.day-select-input',
+      '._hour-select input',
+    ].join(','),
+    roleOf: e => {
+      if (e.matches('.participants input, .day-select-input, ._hour-select input')) return 'textbox';
+      if (e.matches('.navbarMenu, .add-new-event-btn')) return 'button';
+      if (e.matches('.larkc-dayPanel-date, .calendar-timeline-slot')) return 'gridcell';
+      if (e.matches('.virtual-list-options._hour-select ._option, .attendee-search-item')) return 'option';
+      return null;
+    },
+    // The create button is an icon. The class is the stable name it has.
+    nameOf: e => e.matches('.add-new-event-btn') ? '创建日程' : '',
+  }];
+
+  const activeStrategy = opts => {
+    const forced = opts && opts.strategy;
+    if (forced) return STRATEGIES.find(s => s.name === forced) || null;
+    return STRATEGIES.find(s => { try { return s.match(location); } catch (_) { return false; } }) || null;
+  };
+
   /* ---------------------------------------------------------------- helpers */
 
   const clean = s => (s || '').replace(/\s+/g, ' ').trim();
@@ -73,12 +117,15 @@
   const typeOf = e => ((e.getAttribute && e.getAttribute('type')) || '').toLowerCase();
   const isFile = e => e.tagName === 'INPUT' && typeOf(e) === 'file';
 
+  // `checkVisibility` on the element already walks its ancestors. Re-checking
+  // each ancestor rejects a popup that is actually on screen: the portal is
+  // `visibility: hidden` and the panel inside it sets `visibility: visible`.
+  // Shadow hosts are still checked, because `checkVisibility` stops at the root.
   const deepVisible = e => {
     let n = e;
     while (n && n.nodeType === 1) {
       if (n.closest && n.closest('[aria-hidden="true"],[inert]')) return false;
       try { if (!n.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false; } catch (_) { return false; }
-      if (n.parentElement) { n = n.parentElement; continue; }
       const root = n.getRootNode && n.getRootNode();
       n = root && root instanceof ShadowRoot ? root.host : null;
     }
@@ -98,7 +145,7 @@
     return element;
   };
 
-  const roleOf = e => {
+  const nativeRole = e => {
     const explicit = e.getAttribute('role');
     if (explicit && ROLES.includes(explicit)) return explicit;
     const tag = e.tagName;
@@ -119,6 +166,11 @@
     }
     return null;
   };
+
+  // `guardOf` and `reinspect` call this, not the collector, so the strategy has
+  // to live here. Otherwise a ref collected as a button is `target_changed`
+  // the moment something tries to click it.
+  const roleOf = e => nativeRole(e) || (S.strategy && S.strategy.roleOf(e)) || null;
 
   const FLAT = ['button', 'submit', 'reset', 'image'];
 
@@ -142,7 +194,8 @@
         : n.nodeType === 1 && n.getAttribute('aria-hidden') !== 'true' ? nameOf(n, seen) : '').join(' ').trim();
       if (fromText) return fromText;
     }
-    return e.getAttribute('title') || e.getAttribute('placeholder') || '';
+    return e.getAttribute('title') || e.getAttribute('placeholder')
+      || (S.strategy && S.strategy.nameOf && S.strategy.nameOf(e)) || '';
   };
 
   const valueOf = e => {
@@ -298,6 +351,10 @@
     const maxActions = opts.maxActions || 250;
     const maxText = opts.maxText || 6000;
     prune();
+    const strategy = activeStrategy(opts);
+    // Kept for roleOf/nameOf, which reinspect calls after this function returns.
+    S.strategy = strategy;
+    const selector = strategy ? SELECTOR + ',' + strategy.selector : SELECTOR;
     const { roots, cross } = rootList();
     const height = document.documentElement.scrollHeight;
 
@@ -306,10 +363,20 @@
     for (const { doc, chain } of roots) {
       for (const root of rootsOf(doc)) {
         let found = [];
-        try { found = root.querySelectorAll(SELECTOR); } catch (_) { continue; }
+        try { found = root.querySelectorAll(selector); } catch (_) { continue; }
         for (const e of found) {
           if (seen.has(e)) continue;
           if (UNSAFE_TYPES.includes(typeOf(e))) continue;
+          // A strategy row that wraps a real control, or a coarser strategy row
+          // that wraps a finer one, would list the same click twice. Keep the
+          // inner node: the native control, or the innermost strategy match.
+          if (strategy && !nativeRole(e)) {
+            let inner = false;
+            try {
+              inner = !!(e.querySelector(SELECTOR) || e.querySelector(strategy.selector));
+            } catch (_) { inner = false; }
+            if (inner) continue;
+          }
           // Disabled controls are kept rather than dropped. A control that
           // exists and cannot be used is information the model needs: a submit
           // button that only enables once an option is chosen is the ordinary
@@ -459,6 +526,7 @@
       cross_frames: cross.length,
       cross_frame_srcs: cross.slice(0, 3).map(c => c.src).filter(Boolean),
       digest, page_key: S.snap.key,
+      strategy: strategy ? strategy.name : '',
     });
   };
 

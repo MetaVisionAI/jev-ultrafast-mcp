@@ -177,6 +177,7 @@ export function observationFromRaw(raw, { maskSecrets = null, sequence = 0 } = {
     cross_frames: Number(raw.cross_frames) || 0,
     cross_frame_srcs: raw.cross_frame_srcs || [],
     offscreen: Number(raw.offscreen) || 0,
+    strategy: raw.strategy || '',
     sequence,
     // `new_tabs` and `tabs` are deliberately *not* read from `raw`: the observer never emits them.
     // The browser layer sets `new_tabs` after construction (`browser.py` diffs the tab list against
@@ -264,6 +265,7 @@ export function observationLines(observation, {
   let header = `[${marker}#${observation.sequence}] ${observation.url}  "${observation.title}"  `
     + `scroll=${scrollValue(observation.scroll, 'y')}/${scrollValue(observation.scroll, 'height')}  `
     + `reachable=${observation.reachable}/${observation.elements.length}`;
+  if (observation.strategy) header += `  strategy=${observation.strategy}`;
   if (observation.omitted) header += `  (omitted ${observation.omitted} low-priority)`;
   if (observation.offscreen) {
     header += `  (offscreen ${observation.offscreen}, ${FLAG_OFFSCREEN} = will scroll on act)`;

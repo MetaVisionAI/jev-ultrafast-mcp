@@ -187,6 +187,9 @@ class Observation:
     cross_frames: int
     cross_frame_srcs: list[str]
     offscreen: int = 0
+    # Which site strategy collected extra controls, or "" when the page used the
+    # generic selector only. Rendered in the header so a missing row is obvious.
+    strategy: str = ""
     sequence: int = 0
     new_tabs: list[dict] = field(default_factory=list)
     tabs: list[dict] = field(default_factory=list)
@@ -225,6 +228,7 @@ class Observation:
             # "(offscreen N, » = will scroll on act)" note truthful -- it used to be dropped, so
             # the header promised a scroll affordance it never counted.
             offscreen=int(raw.get("offscreen") or 0),
+            strategy=str(raw.get("strategy") or ""),
         )
 
     def find(self, role: str | None = None, name: str | None = None) -> list[Element]:
@@ -252,6 +256,8 @@ class Observation:
         header = (f"[{marker}#{self.sequence}] {self.url}  \"{self.title}\"  "
                   f"scroll={self.scroll.get('y', 0)}/{self.scroll.get('height', 0)}  "
                   f"reachable={self.reachable}/{len(self.elements)}")
+        if self.strategy:
+            header += f"  strategy={self.strategy}"
         if self.omitted:
             header += f"  (omitted {self.omitted} low-priority)"
         if self.offscreen:
