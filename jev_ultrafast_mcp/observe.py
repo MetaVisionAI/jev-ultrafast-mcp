@@ -187,6 +187,10 @@ class Observation:
     cross_frames: int
     cross_frame_srcs: list[str]
     offscreen: int = 0
+    # Which site strategy collected the non-native controls, or "" when the
+    # generic selector was enough. Empty on every page that is not one of those
+    # hosts, so the header stays as it was.
+    strategy: str = ""
     sequence: int = 0
     new_tabs: list[dict] = field(default_factory=list)
     tabs: list[dict] = field(default_factory=list)
@@ -225,6 +229,7 @@ class Observation:
             # "(offscreen N, » = will scroll on act)" note truthful -- it used to be dropped, so
             # the header promised a scroll affordance it never counted.
             offscreen=int(raw.get("offscreen") or 0),
+            strategy=str(raw.get("strategy") or ""),
         )
 
     def find(self, role: str | None = None, name: str | None = None) -> list[Element]:
@@ -256,6 +261,8 @@ class Observation:
             header += f"  (omitted {self.omitted} low-priority)"
         if self.offscreen:
             header += f"  (offscreen {self.offscreen}, \u00bb = will scroll on act)"
+        if self.strategy:
+            header += f"  strategy={self.strategy}"
         triggers = sum(
             1 for element in self.elements
             if element.hoverable and element.expanded != "true"

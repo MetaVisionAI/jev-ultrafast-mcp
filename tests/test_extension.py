@@ -285,6 +285,7 @@ def test_the_pages_a_reader_lands_on_point_at_the_extension():
 OBSERVER_KEYS = {
     "url", "title", "w", "h", "text", "scroll", "reachable", "actions", "omitted",
     "offscreen", "overlays", "cross_frames", "cross_frame_srcs", "digest", "page_key",
+    "strategy",
 }
 
 # The two the server genuinely has no use for. `scroll.height` carries the same number as `h`, and
@@ -305,6 +306,7 @@ MUTATIONS: dict[str, object] = {
     "overlays": [{"role": "dialog", "name": "Sign in", "modal": True}],
     "cross_frames": 3,
     "cross_frame_srcs": ["https://b.example/frame"],
+    "strategy": "feishu",
 }
 
 BASE_ACTION = {

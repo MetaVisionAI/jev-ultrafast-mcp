@@ -8,6 +8,25 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Feishu controls are recognized from the component vocabulary, not from a list of widgets.**
+  The calendar, messenger and event editor paint buttons, menus and day cells as plain `div`s
+  (`larkc-*`, `_trigger` / `_selection` / `_option`, a portal). The Feishu strategy now collects the
+  pointer boundary of those widgets and classifies them by that vocabulary: a `_selection` is a
+  combobox, an `_option` is an option, `larkc-checkbox` is a checkbox, a day cell or a
+  `data-start-time` header is a gridcell, and anything else the cursor calls clickable is a button.
+  Names fall back through tooltip text, `data-tip`, `data-icon`, an `icon-*` class and the semantic
+  words in the ancestor classes, which is what gives the four date fields "开始 日期" / "开始 时间" /
+  "结束 时间" / "结束 日期" instead of four identical textboxes. A day cell carries its panel's month
+  (and "非本月" when it is one); a header cell carries the `data-start-time` as a `YYYY-MM-DD` in
+  GMT+8. A portal that was not visible at the previous click is annotated with the control that
+  opened it. The strategy applies on `feishu.cn`, `feishu.net`, `larksuite.com` and `larkoffice.com`,
+  and `readState({strategy:"feishu"})` forces it for a fixture served from anywhere else.
+  `HELPER_VERSION` goes to 9.
+
+- **An `<input>` with no `type` is a textbox on every site.** HTML's default type is `text`. The
+  collector used to trust the attribute and drop the field, which is how Feishu's attendee and
+  location inputs never appeared. An unrecognised type is treated the same way.
+
 - **`browser_request_help`: hand one step to the person at the browser.** A login, a CAPTCHA, an
   SMS code, a consent or payment confirmation is a step a model must not take, and until now the
   only answer was a goal ending in `blocked` with nobody told. The new tool fronts the session's

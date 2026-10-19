@@ -26,7 +26,7 @@
   // satisfied, the server re-injected this whole file on every observation, and
   // a page holding the older helper was never actually upgraded, because the
   // early return fired on the number it already carried.
-  const VERSION = 8;
+  const VERSION = 9;
   try { if (W !== W.top) return; } catch (_) { return; }
   if (W.__jevMcp && W.__jevMcp.version === VERSION) return;
 
@@ -59,6 +59,224 @@
   const SECONDARY = new Set(['option', 'tab', 'menuitem', 'menuitemcheckbox',
     'menuitemradio', 'treeitem', 'gridcell', 'radio', 'checkbox', 'switch']);
 
+  // Site strategies add controls a page paints without a native tag or an ARIA
+  // role. A host that matches none of them keeps SELECTOR and nothing else.
+  // Roles stay inside ROLES so the decision model already knows the op.
+  const hostEnds = (host, suffix) => host === suffix || host.endsWith('.' + suffix);
+  const GRAPHIC = new Set(['SVG', 'PATH', 'IMG', 'USE']);
+  // SVG elements in an HTML document report a lowercase tagName. Comparing the
+  // raw value misses every icon and leaves the click on a zero-size graphic.
+  const isGraphic = e => !!(e && GRAPHIC.has(String(e.tagName || '').toUpperCase()));
+  let cursorCache = new WeakMap();
+  const cursorIsPointer = e => {
+    if (!e || e.nodeType !== 1) return false;
+    if (cursorCache.has(e)) return cursorCache.get(e);
+    let yes = false;
+    try { yes = getComputedStyle(e).cursor === 'pointer'; } catch (_) { yes = false; }
+    cursorCache.set(e, yes);
+    return yes;
+  };
+  // The boundary is the outermost pointer element. A pointer svg/path/img is
+  // lifted to its host even when that host does not itself change the cursor,
+  // because the graphic is the paint and the host is the control.
+  const promotePointer = e => {
+    let guard = 0;
+    while (e.parentElement && e.parentElement !== document.body
+        && e.parentElement !== document.documentElement
+        && cursorIsPointer(e.parentElement) && guard++ < 8) {
+      e = e.parentElement;
+    }
+    guard = 0;
+    while (e.parentElement && isGraphic(e) && guard++ < 4
+        && e.parentElement !== document.body
+        && e.parentElement !== document.documentElement) {
+      e = e.parentElement;
+    }
+    return e;
+  };
+  const classNameOf = e => {
+    const value = e && e.className;
+    if (!value) return '';
+    return typeof value === 'string' ? value : (value.baseVal || '');
+  };
+  const classWords = e => classNameOf(e).split(/\s+/)
+    .filter(token => token && !token.startsWith('node_modules-') && !token.includes('--'))
+    .flatMap(token => token.replace(/^_+/, '').split(/[^A-Za-z]+/))
+    .map(token => token.toLowerCase())
+    .filter(token => token && token.length <= 20 && !/^[a-f0-9]{6,}$/.test(token));
+  const WORD = {
+    start: '开始', end: '结束',
+    day: '日期', date: '日期',
+    hour: '时间', time: '时间',
+    location: '地点', reminder: '提醒', repeat: '重复',
+    visibility: '公开范围', free: '忙闲',
+  };
+  const KIND = new Set(['日期', '时间']);
+  const POS = new Set(['开始', '结束']);
+  const semanticName = e => {
+    let pos = '', kind = '';
+    const others = [];
+    let node = e;
+    for (let depth = 0; node && depth < 5; depth += 1, node = node.parentElement) {
+      for (const word of classWords(node)) {
+        const mapped = WORD[word];
+        if (!mapped) continue;
+        if (KIND.has(mapped)) { if (!kind) kind = mapped; }
+        else if (POS.has(mapped)) { if (!pos) pos = mapped; }
+        else if (!others.includes(mapped)) others.push(mapped);
+      }
+    }
+    const parts = [];
+    if (pos) parts.push(pos);
+    if (kind) parts.push(kind);
+    if (!parts.length) parts.push(...others);
+    return parts.join(' ');
+  };
+  // A tooltip is a node whose class says so. Searching every sibling's
+  // descendants would name an icon after an unrelated toolbar on the same
+  // page, so only the control's own tooltip, a sibling tooltip, or the
+  // parent's sibling tooltip (the editor's anchor/tooltip pair) counts.
+  const tooltipLabel = node => {
+    if (!node || !node.matches || !node.matches('[class*="tooltip"]')) return '';
+    const text = clean(node.textContent);
+    return text ? text.slice(0, 80) : '';
+  };
+  const tooltipBeside = (parent, skip) => {
+    if (!parent || parent === document.body || parent === document.documentElement) return '';
+    for (const sib of parent.children) {
+      if (sib === skip || sib.contains(skip)) continue;
+      const text = tooltipLabel(sib);
+      if (text) return text;
+    }
+    return '';
+  };
+  const tooltipOf = e => {
+    const inner = e.querySelector && e.querySelector('[class*="tooltip"]');
+    return tooltipLabel(inner) || tooltipBeside(e.parentElement, e)
+      || tooltipBeside(e.parentElement && e.parentElement.parentElement, e.parentElement) || '';
+  };
+  const namedIcon = e => {
+    if (e.getAttribute && e.getAttribute('data-icon')) return e.getAttribute('data-icon');
+    const node = e.querySelector && e.querySelector('[data-icon]');
+    return node ? (node.getAttribute('data-icon') || '') : '';
+  };
+  const iconToken = e => {
+    const blobs = [classNameOf(e)];
+    if (e.querySelectorAll) {
+      for (const node of e.querySelectorAll('svg, img')) blobs.push(classNameOf(node));
+    }
+    for (const blob of blobs) {
+      const token = blob.split(/\s+/).find(item => item.startsWith('icon-'));
+      if (token) return token;
+    }
+    return '';
+  };
+  const formatShanghai = sec => {
+    const parsed = Number(sec);
+    if (!Number.isFinite(parsed)) return '';
+    const date = new Date((parsed + 8 * 3600) * 1000);
+    if (Number.isNaN(date.getTime())) return '';
+    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(date.getUTCDate()).padStart(2, '0');
+    return date.getUTCFullYear() + '-' + month + '-' + day;
+  };
+  const flagged = e => classNameOf(e).split(/\s+/).some(token => token === 'selected'
+    || token === 'active' || token === 'checked' || token.endsWith('-checked')
+    || token.endsWith('__selected'));
+  const classDisabled = e => classNameOf(e).split(/\s+/).some(token => token === 'disabled'
+    || token.endsWith('-disable') || token.endsWith('-disabled'));
+
+  // Feishu paints widgets as plain divs from one component vocabulary
+  // (`larkc-*`, `_trigger` / `_selection` / `_option` / `_portal`). The rules
+  // name that vocabulary, not any one screen's controls.
+  const STRATEGIES = [{
+    name: 'feishu',
+    match: loc => {
+      const host = String((loc && loc.hostname) || '').toLowerCase();
+      return hostEnds(host, 'feishu.cn') || hostEnds(host, 'feishu.net')
+        || hostEnds(host, 'larksuite.com') || hostEnds(host, 'larkoffice.com');
+    },
+    component: [
+      '.larkc-checkbox', '.larkc-dayPanel-date', '._option', '._selection',
+      '[data-start-time]', '.label-btn', '.navbarMenu',
+    ].join(','),
+    candidates(root) {
+      const out = [];
+      const seen = new Set();
+      const add = e => {
+        if (!e || seen.has(e) || isGraphic(e) || nativeRole(e)) return;
+        seen.add(e);
+        out.push(e);
+      };
+      let all = [];
+      try { all = root.querySelectorAll('*'); } catch (_) { return out; }
+      if (all.length > 20000) return out;
+      for (const e of all) if (cursorIsPointer(e)) add(promotePointer(e));
+      let components = [];
+      try { components = root.querySelectorAll(this.component); } catch (_) { components = []; }
+      for (const e of components) add(e);
+      return out;
+    },
+    roleOf(e) {
+      if (e.matches('.larkc-checkbox')) return 'checkbox';
+      if (e.matches('.larkc-dayPanel-date') || e.hasAttribute('data-start-time')) return 'gridcell';
+      if (e.matches('._option')) return 'option';
+      if (e.matches('._selection')) return 'combobox';
+      if (e.matches('.label-btn, .navbarMenu')) return 'button';
+      if (cursorIsPointer(e)) return 'button';
+      if (e.querySelectorAll) {
+        for (const node of e.querySelectorAll('svg, path, img')) {
+          if (cursorIsPointer(node) && promotePointer(node) === e) return 'button';
+        }
+      }
+      return null;
+    },
+    stateOf(e) {
+      const on = flagged(e);
+      let checked = null;
+      if (e.matches('.larkc-checkbox, ._option')) checked = on;
+      else if (on) checked = true;
+      let current = null;
+      let value = null;
+      if (e.matches('._selection')) current = clean(e.innerText).slice(0, 120);
+      if (e.matches('._option')) {
+        const key = e.getAttribute('data-option-key') || '';
+        if (key && key !== '[object Object]') value = key;
+      }
+      return { checked, disabled: classDisabled(e), current, value };
+    },
+    // Only consulted when the generic chain (aria, label, text, placeholder)
+    // produced nothing. Order is the fallback chain, nearest signal first.
+    nameOf(e) {
+      const tip = e.getAttribute('data-tip') || '';
+      return tooltipOf(e) || tip.replace(/^tip-/, '') || namedIcon(e) || iconToken(e) || semanticName(e) || '';
+    },
+    contextOf(e) {
+      const parts = [];
+      if (e.matches('.larkc-dayPanel-date')) {
+        const panel = e.closest('.larkc-datePanel') || e.closest('.larkc-dayPanel');
+        const label = panel && panel.querySelector('.larkc-pickerToolBar-label');
+        if (classNameOf(e).includes('__othermonth')) parts.push('非本月');
+        if (label) {
+          const text = clean(label.textContent);
+          if (text) parts.push(text);
+        }
+      }
+      if (e.hasAttribute('data-start-time')) {
+        const formatted = formatShanghai(e.getAttribute('data-start-time'));
+        if (formatted) parts.push(formatted);
+      }
+      return parts.join(' ');
+    },
+  }];
+
+  const activeStrategy = opts => {
+    const forced = opts && opts.strategy;
+    if (forced) return STRATEGIES.find(item => item.name === forced) || null;
+    try { return STRATEGIES.find(item => item.match(location)) || null; }
+    catch (_) { return null; }
+  };
+
   /* ---------------------------------------------------------------- helpers */
 
   const clean = s => (s || '').replace(/\s+/g, ' ').trim();
@@ -73,12 +291,15 @@
   const typeOf = e => ((e.getAttribute && e.getAttribute('type')) || '').toLowerCase();
   const isFile = e => e.tagName === 'INPUT' && typeOf(e) === 'file';
 
+  // `checkVisibility` on the element already walks its ancestors. Re-checking
+  // each ancestor rejects a popup that is actually on screen: the portal is
+  // `visibility: hidden` and the panel inside it sets `visibility: visible`.
+  // Shadow hosts are still checked, because `checkVisibility` stops at the root.
   const deepVisible = e => {
     let n = e;
     while (n && n.nodeType === 1) {
       if (n.closest && n.closest('[aria-hidden="true"],[inert]')) return false;
       try { if (!n.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false; } catch (_) { return false; }
-      if (n.parentElement) { n = n.parentElement; continue; }
       const root = n.getRootNode && n.getRootNode();
       n = root && root instanceof ShadowRoot ? root.host : null;
     }
@@ -98,7 +319,7 @@
     return element;
   };
 
-  const roleOf = e => {
+  const nativeRole = e => {
     const explicit = e.getAttribute('role');
     if (explicit && ROLES.includes(explicit)) return explicit;
     const tag = e.tagName;
@@ -108,17 +329,24 @@
     if (tag === 'TEXTAREA' || e.isContentEditable) return 'textbox';
     if (tag === 'INPUT') {
       const t = typeOf(e);
+      if (t === 'hidden') return null;
       if (t === 'checkbox') return 'checkbox';
       if (t === 'radio') return 'radio';
       if (['button', 'submit', 'reset', 'image'].includes(t)) return 'button';
       if (t === 'search') return 'searchbox';
       if (t === 'number') return 'spinbutton';
       if (t === 'file') return 'file';
-      if (['text', 'email', 'url', 'tel', 'date', 'datetime-local', 'month',
-        'week', 'time', 'password'].includes(t)) return 'textbox';
+      // HTML's missing type defaults to text. An unrecognised type is still a
+      // field the agent can write; dropping it is how a whole form disappears.
+      return 'textbox';
     }
     return null;
   };
+
+  // `guardOf` and `reinspect` call this, not the collector, so a strategy role
+  // has to live here. Otherwise a ref collected as a button is `target_changed`
+  // the moment something tries to click it.
+  const roleOf = e => nativeRole(e) || (S.strategy && S.strategy.roleOf(e)) || null;
 
   const FLAT = ['button', 'submit', 'reset', 'image'];
 
@@ -142,7 +370,8 @@
         : n.nodeType === 1 && n.getAttribute('aria-hidden') !== 'true' ? nameOf(n, seen) : '').join(' ').trim();
       if (fromText) return fromText;
     }
-    return e.getAttribute('title') || e.getAttribute('placeholder') || '';
+    return e.getAttribute('title') || e.getAttribute('placeholder')
+      || (S.strategy && S.strategy.nameOf && S.strategy.nameOf(e)) || '';
   };
 
   const valueOf = e => {
@@ -153,7 +382,8 @@
     return '';
   };
 
-  const disabled = e => e.matches(':disabled') || !!e.closest('[aria-disabled="true"],[inert]');
+  const disabled = e => e.matches(':disabled') || !!e.closest('[aria-disabled="true"],[inert]')
+    || !!(S.strategy && S.strategy.stateOf && S.strategy.stateOf(e).disabled);
 
   const isEditable = e => {
     if (isFile(e) || e.tagName === 'SELECT') return false;
@@ -253,11 +483,17 @@
 
   const scopeOf = e => e.closest('form,dialog,[role="dialog"],article,li,tr,[role="row"],[role="listitem"]') || e.parentElement;
 
+  const checkedOf = e => {
+    const state = S.strategy && S.strategy.stateOf ? S.strategy.stateOf(e) : null;
+    if (state && state.checked != null) return state.checked;
+    return typeOf(e) && ['checkbox', 'radio'].includes(typeOf(e)) ? !!e.checked : null;
+  };
+
   const guardOf = e => {
     if (!e || !e.isConnected || !deepVisible(e)) return null;
     const scope = scopeOf(e);
     return JSON.stringify([identity(e), roleOf(e), nameOf(e), valueOf(e),
-      typeOf(e) && ['checkbox', 'radio'].includes(typeOf(e)) ? !!e.checked : null,
+      checkedOf(e),
       e.selectedIndex == null ? null : e.selectedIndex, !!e.readOnly, disabled(e),
       e.getAttribute('aria-disabled'), e.getAttribute('aria-expanded'),
       e.getAttribute('aria-checked'), e.getAttribute('aria-selected'), e.getAttribute('href'),
@@ -298,18 +534,45 @@
     const maxActions = opts.maxActions || 250;
     const maxText = opts.maxText || 6000;
     prune();
+    cursorCache = new WeakMap();
+    const strategy = activeStrategy(opts);
+    // Kept for roleOf/nameOf/disabled, which reinspect calls after this returns.
+    S.strategy = strategy;
     const { roots, cross } = rootList();
     const height = document.documentElement.scrollHeight;
+    const contextByNode = new Map();
+
+    const portalNote = e => {
+      if (!S.lastClicked || !S.portalsAtClick || !e.closest) return '';
+      const portal = e.closest('._portal, .day-select-popup');
+      if (!portal || S.portalsAtClick.get(portal) === true) return '';
+      return '↳ ' + S.lastClicked;
+    };
 
     const items = [];
     const seen = new Set();
     for (const { doc, chain } of roots) {
       for (const root of rootsOf(doc)) {
         let found = [];
-        try { found = root.querySelectorAll(SELECTOR); } catch (_) { continue; }
+        try { found = [...root.querySelectorAll(SELECTOR)]; } catch (_) { continue; }
+        if (strategy && strategy.candidates) {
+          for (const extra of strategy.candidates(root)) found.push(extra);
+        }
         for (const e of found) {
           if (seen.has(e)) continue;
           if (UNSAFE_TYPES.includes(typeOf(e))) continue;
+          // A strategy host that wraps a real control would list the same click
+          // twice. Keep the native control. A generic pointer host that only
+          // exists to hold a component widget yields to that widget, so the
+          // role comes from the component and not from the cursor.
+          if (strategy && strategy.component && !nativeRole(e)) {
+            let inner = false;
+            try {
+              inner = !!(e.querySelector(SELECTOR)
+                || (!e.matches(strategy.component) && e.querySelector(strategy.component)));
+            } catch (_) { inner = false; }
+            if (inner) continue;
+          }
           // Disabled controls are kept rather than dropped. A control that
           // exists and cannot be used is information the model needs: a submit
           // button that only enables once an option is chosen is the ordinary
@@ -373,8 +636,16 @@
       }
       // Login forms are a blind spot for observers that drop password fields.
       // Keep the control usable, but never let its value leave the page.
+      const state = strategy && strategy.stateOf ? strategy.stateOf(e) : null;
+      if (strategy) {
+        const extra = [strategy.contextOf ? strategy.contextOf(e) : '', portalNote(e)]
+          .filter(Boolean).join(' ');
+        if (extra) contextByNode.set(node, extra);
+      }
       const secretField = typeOf(e) === 'password' || (SECRET_HINT.test(name) && isEditable(e));
       const editable = isEditable(e);
+      const rawValue = valueOf(e);
+      const shownValue = state && state.value && !rawValue ? state.value : rawValue;
       // A menu that only opens on hover is reachable through its trigger and
       // nothing else, and the trigger announces itself: `aria-haspopup` names
       // the popup, `aria-expanded` tracks it. Those two attributes are the
@@ -387,7 +658,7 @@
             && !['checkbox', 'radio', 'switch'].includes(it.role));
       built.push({
         node, ref: 'e' + node, role: it.role, name, label: name || it.role,
-        value: secretField ? '' : valueOf(e).slice(0, 300),
+        value: secretField ? '' : shownValue.slice(0, 300),
         editable, occluded, inViewport, hoverable, disabled: isDisabled,
         // Role outranks position. The reverse order -- viewport 100 against a
         // primary control's 40 -- let a submit button below the fold lose its
@@ -405,9 +676,11 @@
           + (SECONDARY.has(it.role) ? 400 : 0)
           + (inViewport ? 100 : 0),
         order: built.length,
-        checked: ['checkbox', 'radio'].includes(typeOf(e)) ? !!e.checked : null,
+        checked: state && state.checked != null ? state.checked : checkedOf(e),
         expanded,
-        current: e.tagName === 'SELECT' ? clean([...e.selectedOptions].map(o => o.label).join(', ')).slice(0, 120) : null,
+        current: e.tagName === 'SELECT'
+          ? clean([...e.selectedOptions].map(o => o.label).join(', ')).slice(0, 120)
+          : (state && state.current) || null,
         multiple: e.tagName === 'SELECT' ? !!e.multiple : false,
         accept: isFile(e) ? (e.getAttribute('accept') || '') : null,
         options: options.slice(0, 40),
@@ -417,10 +690,16 @@
       });
     }
 
-    // Context only where a label repeats — shipping it unconditionally is waste.
+    // A repeated label still gets its scope. Strategy context (a month, a
+    // timestamp, the control that opened a portal) is part of the name of the
+    // control, so it is kept even when the label is unique.
     for (const b of built) {
       const key = b.role + '\u0000' + b.name.toLowerCase();
-      if ((count.get(key) || 0) > 1) b.context = b.scope;
+      const parts = [];
+      const extra = contextByNode.get(b.node) || '';
+      if (extra) parts.push(extra);
+      if ((count.get(key) || 0) > 1 && b.scope) parts.push(b.scope);
+      if (parts.length) b.context = parts.join(' ').slice(0, 120);
       delete b.scope;
     }
 
@@ -459,6 +738,7 @@
       cross_frames: cross.length,
       cross_frame_srcs: cross.slice(0, 3).map(c => c.src).filter(Boolean),
       digest, page_key: S.snap.key,
+      strategy: strategy ? strategy.name : '',
     });
   };
 
@@ -513,6 +793,17 @@
     }
     const off = offsetFor(frameChainOf(e));
     if (!off.ok) return { ok: false, reason: off.reason };
+    // The next observation attributes a portal that was not on screen yet to
+    // this control. Recording it here, on a resolve that is about to click,
+    // is what makes "the popup this click opened" a fact rather than a guess.
+    const id = String(ref);
+    S.lastClicked = id.startsWith('e') ? id : 'e' + id;
+    S.portalsAtClick = new WeakMap();
+    try {
+      for (const portal of document.querySelectorAll('._portal, .day-select-popup')) {
+        S.portalsAtClick.set(portal, deepVisible(portal));
+      }
+    } catch (_) {}
     return { ok: true, x: Math.round(lx + off.x), y: Math.round(ly + off.y) };
   };
 
