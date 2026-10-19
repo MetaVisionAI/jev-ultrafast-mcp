@@ -297,6 +297,7 @@ class Config:
     deny_domains: list[str] = field(default_factory=list)
     allow_js: bool = False
     allow_uploads: bool = True
+    request_help: bool = True             # False = browser_request_help answers `disabled`
     confirm_patterns: list[str] = field(default_factory=lambda: list(DEFAULT_DENY_PATTERNS))
     secret_patterns: list[str] = field(default_factory=lambda: list(DEFAULT_SECRET_PATTERNS))
     typesafe_key: str | None = None
@@ -357,6 +358,7 @@ class Config:
             deny_domains=_env_list("JEVMCP_DENY_DOMAINS"),
             allow_js=_env_bool("JEVMCP_ALLOW_JS", False),
             allow_uploads=_env_bool("JEVMCP_ALLOW_UPLOADS", True),
+            request_help=_env_bool("JEVMCP_REQUEST_HELP", True),
             confirm_patterns=_env_list("JEVMCP_CONFIRM_PATTERNS") or list(DEFAULT_DENY_PATTERNS),
             typesafe_key=turbo_key,
             typesafe_model=os.environ.get("TYPESAFE_MODEL", "jev-latest"),

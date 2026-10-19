@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import help as help_mod
 from . import macros as macros_mod
 from .cdp import (
     Cdp,
@@ -41,6 +43,9 @@ HELPER_SRC = (Path(__file__).with_name("js") / "observer.js").read_text(encoding
 # source's was held to nothing, which is how 7 here and 6 in the page survived a
 # release. `tests/test_helper_version.py` pins all three now.
 HELPER_VERSION = 8
+
+HELP_BINDING = "__jevHelp"
+HELP_POLL_MS = 500
 
 MODIFIERS = {
     "alt": 1, "option": 1,
@@ -499,6 +504,117 @@ class Session:
         previous goal's count would report itself stuck on its very first step.
         """
         self._no_change_streak = 0
+
+    # ------------------------------------------------------------ human help
+
+    def request_help(self, request: "help_mod.HelpRequest", *, poll_ms: int = HELP_POLL_MS) -> dict:
+        """Show the user a panel on this tab and wait until they hand control back.
+
+        Ends on the first of: a button press (`continued` / `cancelled`), the
+        completion conditions holding for `request.stable_ms` (`completed`), or
+        the deadline (`timed_out`). A page that navigates while the user works
+        loses the panel with its document, so every poll checks for it and puts
+        it back; the navigation itself never ends the request.
+        """
+        reason = help_mod.disabled_reason(self.cfg)
+        if reason:
+            return {"outcome": "disabled", "reason": reason}
+        started = time.monotonic()
+        token = uuid.uuid4().hex
+        try:
+            self.cdp.call("Target.activateTarget", targetId=self.target_id)
+        except CdpError:
+            pass
+        try:
+            self._call("Page.bringToFront")
+        except CdpError:
+            pass
+        try:
+            self._call("Runtime.addBinding", name=HELP_BINDING)
+        except CdpError:
+            pass  # the panel also leaves its answer on `window`, which the poll reads
+
+        state = self._safe_eval(help_mod.poll_js(request, token))
+        if isinstance(state, dict):
+            invalid = help_mod.invalid_selectors(request, state)
+            if invalid:
+                raise ValueError(f"completion has invalid CSS selectors: {invalid}")
+
+        points, unresolved = [], []
+        for ref in request.refs:
+            geometry = self._geometry(ref)
+            if geometry.get("ok"):
+                points.append({"x": geometry["x"], "y": geometry["y"], "label": ref})
+            else:
+                unresolved.append(f"{ref} ({geometry.get('reason', 'unresolved')})")
+
+        self.cdp.events.clear()
+        shown = self._safe_eval(help_mod.install_js(request, token, HELP_BINDING, points))
+        resolved = list((shown or {}).get("resolved") or [])
+        unresolved += list((shown or {}).get("unresolved") or [])
+        reinjected = 0
+        outcome, note, completed_by = "timed_out", "", ""
+        deadline = started + request.timeout_ms / 1000.0
+        stable_since: float | None = None
+        try:
+            while True:
+                state = self._safe_eval(help_mod.poll_js(request, token))
+                answer = self._help_answer(token) or (state or {}).get("answer")
+                if (isinstance(answer, dict) and answer.get("token") == token
+                        and answer.get("action") in ("continued", "cancelled")):
+                    outcome, note = answer["action"], str(answer.get("note") or "")
+                    break
+                now = time.monotonic()
+                if isinstance(state, dict):
+                    if not state.get("present"):
+                        # A new document: refs from the old one mean nothing here,
+                        # so only selectors are outlined again.
+                        self._safe_eval(help_mod.install_js(request, token, HELP_BINDING, []))
+                        reinjected += 1
+                    if help_mod.met(request, state):
+                        stable_since = stable_since if stable_since is not None else now
+                        if (now - stable_since) * 1000 >= request.stable_ms:
+                            outcome, completed_by = "completed", "system"
+                            break
+                    else:
+                        stable_since = None
+                else:
+                    stable_since = None  # mid-navigation: nothing on the page holds yet
+                if now >= deadline:
+                    break
+                time.sleep(poll_ms / 1000.0)
+        finally:
+            self._safe_eval(help_mod.remove_js())
+            self.reset_progress()
+        result = {
+            "outcome": outcome,
+            "elapsed_ms": int((time.monotonic() - started) * 1000),
+            "resolved_targets": resolved,
+            "unresolved_targets": unresolved,
+            "reinjected": reinjected,
+        }
+        if note:
+            result["note"] = note
+        if completed_by:
+            result["completed_by"] = completed_by
+        return result
+
+    def _help_answer(self, token: str) -> dict | None:
+        """The panel's answer, if it arrived through the binding."""
+        self._drain_events()
+        for message in self.cdp.events:
+            if message.get("method") != "Runtime.bindingCalled":
+                continue
+            params = message.get("params") or {}
+            if params.get("name") != HELP_BINDING:
+                continue
+            try:
+                answer = json.loads(params.get("payload") or "{}")
+            except ValueError:
+                continue
+            if isinstance(answer, dict) and answer.get("token") == token:
+                return answer
+        return None
 
     def observe(self, *, include_text: bool = True, full: bool = False,
                 focus: list[str] | None = None) -> Observation:
@@ -1385,6 +1501,7 @@ class BrowserManager:
             "text_model": bool(self.cfg.text_model_key),
             "js_eval": self.cfg.allow_js,
             "uploads": self.cfg.allow_uploads,
+            "request_help": help_mod.disabled_reason(self.cfg) or "available",
             "allow_domains": self.cfg.allow_domains,
             "deny_domains": self.cfg.deny_domains,
         }

@@ -1,6 +1,6 @@
 """MCP surface.
 
-Ten tools. The important design choice is what is *not* here: there is no
+Eleven tools. The important design choice is what is *not* here: there is no
 `javascript`, no `click_at(x, y)`, and no `query_selector`. An agent can only
 name a ref that the server observed, and the server only dispatches input after
 re-checking that the ref still means what it meant. That property is what makes
@@ -17,6 +17,7 @@ from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
 
 from . import assertions as assertions_mod
+from . import help as help_mod
 from . import macros as macros_mod
 from . import policy
 from .browser import BrowserManager, PageStale
@@ -38,6 +39,12 @@ Reading a page is not a task. browser_open / browser_observe / browser_assert
 are direct, free, and need no key -- use them to inspect, to read a value, or to
 work out why a goal failed. The only other reason to fall back is browser_goal
 answering `turbo_unavailable`, which means no model key is configured.
+
+A person, not a model, clears a login, CAPTCHA, SMS/OTP code, consent or payment
+confirmation. When the page shows one, or two attempts made no progress, call
+browser_request_help and let the user finish that step. After `continued` or
+`completed`, observe again; after `cancelled`, `timed_out` or `disabled`, do not
+ask again. Never type the user's password or solve a CAPTCHA for them.
 
 The manual loop, for those two cases only:
     browser_open -> read the element table -> browser_act -> browser_assert.
@@ -630,6 +637,66 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
         return "\n".join(lines)
     except (policy.TurboUnavailable, ChromeLaunchError, CdpError, PageStale) as exc:
         return _error(exc)
+
+
+HELP_NEXT = {
+    "continued": "The user handed control back. Observe again and resume with fresh refs.",
+    "completed": "The completion criteria held. Observe again and resume with fresh refs.",
+    "cancelled": "The user declined. Respect it; do not repeat the request.",
+    "timed_out": "Nobody finished the step in time. Do not repeat the request; report the blocker.",
+    "disabled": ("No human action was confirmed. Do not ask again or change the setting; use "
+                 "existing login state and viable alternatives, or report the specific blocker."),
+}
+
+
+@SERVER.tool(annotations=WRITES_LOCAL)
+def browser_request_help(prompt: str, session: str = "default", title: str = "",
+                         targets: list[str] | None = None, completion: dict | None = None,
+                         timeout_ms: int = help_mod.DEFAULT_TIMEOUT_MS) -> str:
+    """Hand one step to the person at the browser and wait for them to hand it back.
+
+    For a login, CAPTCHA, SMS/OTP code, consent or payment confirmation, or after
+    two attempts made no progress. Brings the session's tab to the front, shows a
+    panel with `prompt` and the buttons "完成并交还控制权" / "取消请求", outlines
+    `targets` (refs like "e3" or CSS selectors), and blocks until the user presses
+    one, `completion` holds, or `timeout_ms` (default 5 min, max 30) runs out.
+
+    `completion`: {"any"|"all": [ {url_contains|url_matches|selector_exists|
+    selector_missing|text_exists|text_missing: "..."} ], "stable_for_ms": 1000},
+    at most 8 conditions. Navigation alone never completes a request.
+
+    Outcomes: continued, completed, cancelled, timed_out, disabled. After
+    continued/completed observe again; after cancelled/timed_out/disabled do not
+    ask again.
+    """
+    try:
+        request = help_mod.parse(prompt, title, targets, completion, timeout_ms)
+        tab = _session(session)
+        result = tab.request_help(request)
+    except ValueError as exc:
+        return f"invalid_params: {exc}"
+    except (ChromeLaunchError, CdpError, PageStale) as exc:
+        return _error(exc)
+    outcome = result["outcome"]
+    if outcome == "disabled":
+        return f"help disabled: {result['reason']}\n{HELP_NEXT['disabled']}"
+    lines = [f"help {outcome} after {result['elapsed_ms'] / 1000:.1f}s"
+             + (f" (completed_by: {result['completed_by']})" if result.get("completed_by") else "")]
+    if result.get("note"):
+        lines.append(f"note from the user: {result['note']}")
+    if result["resolved_targets"] or result["unresolved_targets"]:
+        lines.append(f"targets outlined: {', '.join(result['resolved_targets']) or 'none'}"
+                     + (f"; unresolved: {', '.join(result['unresolved_targets'])}"
+                        if result["unresolved_targets"] else ""))
+    lines.append(HELP_NEXT[outcome])
+    try:
+        observation = tab.observe(full=True)
+    except (CdpError, PageStale) as exc:
+        lines.append(f"(could not re-read the page: {exc})")
+        return "\n".join(lines)
+    lines.append("")
+    lines.append(_view(observation, mode="full"))
+    return "\n".join(lines)
 
 
 @SERVER.tool(annotations=WRITES)

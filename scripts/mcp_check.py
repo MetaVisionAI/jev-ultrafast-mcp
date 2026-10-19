@@ -111,7 +111,7 @@ async def _run(base: str, state: Path) -> int:
             expected = {
                 "browser_open", "browser_observe", "browser_act", "browser_assert",
                 "browser_macro", "browser_goal", "browser_tabs", "browser_sessions",
-                "browser_close", "browser_doctor",
+                "browser_close", "browser_doctor", "browser_request_help",
             }
             check("all tools exposed", expected.issubset(set(names)), ", ".join(names))
             check("no raw javascript escape hatch in the default surface",
