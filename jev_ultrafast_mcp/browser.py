@@ -1153,7 +1153,10 @@ class Session:
         geometry = self._ensure_reachable(ref)
         if not geometry.get("ok"):
             raise PageStale(geometry.get("reason", "unreachable"))
-        x, y = geometry["x"], geometry["y"]
+        self.click_at(geometry["x"], geometry["y"])
+
+    def click_at(self, x: float, y: float) -> None:
+        """Press and release at CSS pixels. The caller already chose the point."""
         self._call("Input.dispatchMouseEvent", type="mouseMoved", x=x, y=y)
         for event in ("mousePressed", "mouseReleased"):
             self._call("Input.dispatchMouseEvent", type=event, x=x, y=y,
