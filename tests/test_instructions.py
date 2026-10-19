@@ -88,3 +88,18 @@ def test_reading_a_page_is_excluded_from_the_handoff_rule():
         "the instructions must say that reading a page is not a task")
     assert "need no key" in INSTRUCTIONS, (
         "and must say why the direct tools survive the rule")
+
+
+def test_human_steps_are_handed_to_the_user_not_attempted():
+    """The agent decides when a page needs a person; the instructions are where it learns how.
+
+    The server detects no login or CAPTCHA on its own, so the only thing that
+    makes a host stop and ask instead of typing a password or looping on a
+    slider is this rule -- and the half that matters as much is not asking
+    again once the user has said no.
+    """
+    assert "browser_request_help" in INSTRUCTIONS
+    for word in ("login", "CAPTCHA", "OTP"):
+        assert word in INSTRUCTIONS, word
+    assert "do not\nask again" in INSTRUCTIONS or "do not ask again" in INSTRUCTIONS
+    assert "Never type the user's password" in INSTRUCTIONS

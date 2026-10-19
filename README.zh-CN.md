@@ -65,7 +65,7 @@ python3 -m venv ~/.jev-ultrafast-mcp/venv
 ```
 
 这会给你一个 `jev-ultrafast-mcp` 命令，以及一个可以填进客户端配置的稳定解释器路径 —— 已在
-Python 3.13 + 最新 `mcp` SDK 上实测：十个工具全部正常列出。
+Python 3.13 + 最新 `mcp` SDK 上实测：十一个工具全部正常列出。
 
 `scripts/install.py` 是另一半：它会找到你机器上的 MCP 客户端，按各自期望的格式写入配置，
 **合并**进现有文件，并且先存一份 `.bak`。
@@ -480,7 +480,7 @@ e12  btn    Delete account
 
 ## 工具
 
-一共十个，多数会话只会用到其中四个。
+一共十一个，多数会话只会用到其中四个。
 
 | 工具 | 说明 |
 |---|---|
@@ -490,6 +490,7 @@ e12  btn    Delete account
 | `browser_assert` | 对页面做确定性断言，不靠模型判断 |
 | `browser_macro` | 录一次流程，之后回放，零模型调用 |
 | `browser_goal` | 把整个任务交出去：由决策模型驱动页面 |
+| `browser_request_help` | 把一步（登录、验证码、短信码）交给浏览器前的人，等他交还控制权 |
 | `browser_tabs` | 列出、新建、切换、关闭标签页 |
 | `browser_sessions` | 列出当前存活的浏览器会话 |
 | `browser_close` | 收尾一个会话 |
@@ -582,6 +583,25 @@ decisions 路由）。给了 `verify` 检查时返回 `verified: PASS/FAIL`。
 这是「最后一个动作把被操作对象本身消灭掉」这类目标的常态 —— 点完签到按钮，按钮就没了，模型
 找不到还能操作的东西，于是一个其实已经成功的目标被它报成 `BLOCKED`。
 
+### `browser_request_help(prompt, session="default", title="", targets=[], completion={}, timeout_ms=300000)`
+有些步骤只能由人来做：登录、验证码、短信码、同意授权、支付确认。服务端**不做自动检测**——由 agent
+根据观察结果判断，规则写在
+[`references/help-and-recovery.md`](https://github.com/jiawei686/jev-ultrafast-mcp/blob/main/skills/jev-ultrafast-mcp/references/help-and-recovery.md)。
+调用后会把该会话的标签页切到前台，在页面上显示提示和「完成并交还控制权」「取消请求」两个按钮，给
+`targets`（ref 或 CSS 选择器）描边，然后阻塞，直到用户点了按钮、`completion` 条件持续成立满
+`stable_for_ms`，或者超时。
+
+```json
+{"prompt": "请在此窗口登录，完成后点击按钮",
+ "targets": ["e3"],
+ "completion": {"any": [{"selector_missing": "#login-dialog"}, {"url_contains": "/home"}]}}
+```
+
+条件可选 `url_contains`、`url_matches`、`selector_exists`、`selector_missing`、`text_exists`、
+`text_missing`，最多 8 条。仅仅发生页面跳转不算完成。结果是 `continued`、`completed`、`cancelled`、
+`timed_out` 或 `disabled`，后面附一份最新的元素表：前两种重新观察后继续，其余几种不要再次请求。
+`disabled` 表示没人可问——设置了 `JEVMCP_REQUEST_HELP=0`，或者浏览器是无头模式。
+
 ### `browser_tabs` · `browser_sessions` · `browser_close` · `browser_doctor`
 标签页管理（列 / 新建 / 切换 / 关闭）、会话列举、收尾，以及自检 —— 报告找到的是哪个浏览器、
 能不能连上。
@@ -608,6 +628,7 @@ decisions 路由）。给了 `verify` 检查时返回 `verified: PASS/FAIL`。
 | 否 | `JEVMCP_CONFIRM_PATTERNS` | pay / delete / unsubscribe … | 命中这些词的操作需要 `"confirm": true` |
 | 否 | `JEVMCP_ALLOW_JS` | `0` | 打开 `eval` 与 js 断言 |
 | 否 | `JEVMCP_ALLOW_UPLOADS` | `1` | 控制 `upload` op |
+| 否 | `JEVMCP_REQUEST_HELP` | `1` | 设为 `0` 时 `browser_request_help` 返回 `disabled` |
 | 否 | `JEVMCP_MAX_ACTIONS` | `250` | 元素表条数上限，按有用程度裁剪 |
 | 否 | `JEVMCP_MAX_TEXT` | `6000` | 单次观测的可见文本上限 |
 | 否 | `JEVMCP_SETTLE_TIMEOUT` | `4.0` | 打开网址后最多等多久：等页面停止发请求、且元素表不再变化 |

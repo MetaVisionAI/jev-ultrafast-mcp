@@ -39,6 +39,9 @@ Cline, Windsurf, Gemini CLI). MIT licensed. Requires Python ≥ 3.10 and any Chr
 - `browser_act(ops, session, dry_run, stop_on_error, observe_after)` — many ops in one round trip
 - `browser_assert(checks, session)` — deterministic PASS/FAIL, no model judgement
 - `browser_macro(action, session, name, params, ...)` — record a flow, replay it at zero model cost
+- `browser_request_help(prompt, session, title, targets, completion, timeout_ms)` — hand one step
+  (login, CAPTCHA, SMS code) to the person at the browser: brings the tab forward, shows a panel, and
+  blocks until they hand control back, the completion conditions hold, or it times out
 - `browser_tabs`, `browser_sessions`, `browser_close`, `browser_doctor` — tabs, sessions, teardown, self-check
 
 ## Notes for a reader deciding whether to use this

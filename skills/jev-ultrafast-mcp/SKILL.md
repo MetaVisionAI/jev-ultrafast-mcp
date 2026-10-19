@@ -67,6 +67,12 @@ Exactly two cases:
    `browser_open` → read the element table → `browser_act` → `browser_assert`.
 2. You only want to look (see above).
 
+## Where to read next
+
+| Situation | Read |
+| --- | --- |
+| Login/CAPTCHA/OTP/consent/payment confirmation, two attempts without progress, or an operation error | [Human help and recovery](references/help-and-recovery.md) |
+
 ## Recurring work: record it once, then replay for free
 
 `browser_macro` records the path a goal discovered and replays it **with no model
@@ -111,8 +117,9 @@ nohup "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
   it. A dedicated `--user-data-dir` is what makes this legal.
 - The login you need lives in that profile directory, so signing in once there
   makes every later handoff work.
-- Do **not** type the user's password for them. If a goal sits behind a login, have
-  the user sign in in that window; then hand the task over.
+- Do **not** type the user's password for them. If a goal sits behind a login, hand
+  that step to the user with `browser_request_help`, then hand the task back to
+  `browser_goal` — see [Human help and recovery](references/help-and-recovery.md).
 
 Two traps when supplying that browser:
 
@@ -170,13 +177,18 @@ Two signatures that look like engine bugs but are not:
   a page with no controls on it and hand back `blocked` at step 0 twice on a page
   that rendered a second later. If a `blocked` at step 0 still survives that,
   raise `JEVMCP_SETTLE_TIMEOUT` before you rewrite the goal.
+  If the page in the final view is a sign-in, a CAPTCHA or a code prompt, the
+  goal is not wrong and no rewrite will get past it: that is a human step, so
+  follow [Human help and recovery](references/help-and-recovery.md).
 - **`status: stopped: no progress`.** The page stopped changing for the limit
   `browser.py` defines, so the run ended rather than spending the rest of
   `max_steps` on `WAIT`s. This is the usual shape of a goal that has *already
   succeeded* — the last action removed the thing it acted on — so read `verified`
   before you read `status`: a passing assertion upgrades this to `done`. If
   `verified` is absent or failing, the goal genuinely stalled and needs a
-  different goal string, not a retry.
+  different goal string, not a retry — unless what stalled it is a human step
+  (a login wall, a slider, an SMS code), which no goal string clears; then
+  follow [Human help and recovery](references/help-and-recovery.md).
 - **`turbo_unavailable: … TYPE_TEXT …`.** The model *did* answer — it returned a plan
   that types into a field, and the **policy layer** refused it. The optional text
   helper only affects writing a value into an input; a click-only task needs no key.

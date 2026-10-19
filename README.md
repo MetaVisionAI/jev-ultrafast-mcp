@@ -71,7 +71,7 @@ python3 -m venv ~/.jev-ultrafast-mcp/venv
 ```
 
 That gives you a `jev-ultrafast-mcp` console script and a stable interpreter path to put in a
-client config — verified against the latest `mcp` SDK on Python 3.13, every one of the ten tools
+client config — verified against the latest `mcp` SDK on Python 3.13, every one of the eleven tools
 listed.
 
 `scripts/install.py` is the other half: it finds your MCP clients and writes the config each one
@@ -520,7 +520,7 @@ the model re-reads only the part of the page that moved.
 
 ## Tools
 
-Ten tools. Most sessions need four of them.
+Eleven tools. Most sessions need four of them.
 
 | Tool | Description |
 |---|---|
@@ -530,6 +530,7 @@ Ten tools. Most sessions need four of them.
 | `browser_assert` | Deterministic checks on the page, with no model judgement |
 | `browser_macro` | Record a flow once, then replay it with zero model calls |
 | `browser_goal` | Hand the whole task over: the decision model drives the page |
+| `browser_request_help` | Hand one step (login, CAPTCHA, code) to the person at the browser and wait for it back |
 | `browser_tabs` | List, open, switch and close tabs |
 | `browser_sessions` | List the live browser sessions |
 | `browser_close` | Tear a session down |
@@ -636,6 +637,26 @@ records that it overruled. This is the ordinary shape of a goal whose last actio
 acted on — click a check-in button and the button is gone, so the model, finding nothing left to do,
 reports `BLOCKED` on a goal that in fact succeeded.
 
+### `browser_request_help(prompt, session="default", title="", targets=[], completion={}, timeout_ms=300000)`
+Some steps belong to a person: a login, a CAPTCHA, an SMS code, a consent or payment confirmation.
+The server does not try to detect them — the agent decides from the observation, following
+[`references/help-and-recovery.md`](https://github.com/jiawei686/jev-ultrafast-mcp/blob/main/skills/jev-ultrafast-mcp/references/help-and-recovery.md).
+This call brings the session's tab to the front, shows a panel with the prompt and the buttons
+"完成并交还控制权" / "取消请求", outlines `targets` (refs or CSS selectors), and blocks until the
+user presses one, the `completion` conditions hold for `stable_for_ms`, or the timeout runs out.
+
+```json
+{"prompt": "Please sign in, then press the button",
+ "targets": ["e3"],
+ "completion": {"any": [{"selector_missing": "#login-dialog"}, {"url_contains": "/home"}]}}
+```
+
+Conditions are `url_contains`, `url_matches`, `selector_exists`, `selector_missing`,
+`text_exists` and `text_missing`, at most eight. Navigation alone never completes a request. The
+answer is `continued`, `completed`, `cancelled`, `timed_out` or `disabled`, followed by a fresh
+element table: observe and resume after the first two, and do not ask again after the rest.
+`disabled` means nobody can be asked — `JEVMCP_REQUEST_HELP=0`, or a headless browser.
+
 ### `browser_tabs` · `browser_sessions` · `browser_close` · `browser_doctor`
 Tab management (list / new / switch / close), session listing, teardown, and a self-check that
 reports which browser was found and whether it is reachable.
@@ -662,6 +683,7 @@ All optional; the defaults are the point.
 | No | `JEVMCP_CONFIRM_PATTERNS` | pay / delete / unsubscribe … | clicks matching these need `"confirm": true` |
 | No | `JEVMCP_ALLOW_JS` | `0` | enables `eval` and `js` assertions |
 | No | `JEVMCP_ALLOW_UPLOADS` | `1` | gates the `upload` op |
+| No | `JEVMCP_REQUEST_HELP` | `1` | `0` makes `browser_request_help` answer `disabled` |
 | No | `JEVMCP_MAX_ACTIONS` | `250` | element-table cap, applied by usefulness |
 | No | `JEVMCP_MAX_TEXT` | `6000` | visible-text cap per observation |
 | No | `JEVMCP_SETTLE_TIMEOUT` | `4.0` | after opening a URL, how long to wait for the page to stop fetching and its element table to stop changing |

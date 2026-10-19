@@ -8,6 +8,18 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **`browser_request_help`: hand one step to the person at the browser.** A login, a CAPTCHA, an
+  SMS code, a consent or payment confirmation is a step a model must not take, and until now the
+  only answer was a goal ending in `blocked` with nobody told. The new tool fronts the session's
+  tab, shows a panel ("完成并交还控制权" / "取消请求", plus a note) and blocks until the user hands
+  control back, completion conditions (`url_contains`, `url_matches`, `selector_exists`,
+  `selector_missing`, `text_exists`, `text_missing`, at most eight) hold for `stable_for_ms`, or the
+  timeout. The panel is put back when the page navigates, and navigation alone completes nothing.
+  It answers `disabled` when nobody can see the page — `JEVMCP_REQUEST_HELP=0`, or a headless
+  launch. The division of labour follows Tencent's BrowserSkill: the server detects nothing, and
+  *when* to ask is the agent's call, written down in the skill's new
+  `references/help-and-recovery.md` with what to do after each outcome.
+
 - **A Claude Desktop bundle, and the entry point that would have shipped broken.** `mcpb/` plus
   `scripts/build_mcpb.py` pack the server as a `.mcpb`, the format Claude Desktop installs by
   double-click. The manifest declares `server.type: "uv"` rather than `"python"`, because the MCPB

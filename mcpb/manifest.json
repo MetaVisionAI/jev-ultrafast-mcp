@@ -67,6 +67,10 @@
       "description": "Hand the whole task over: a decision model drives the page to the end server-side, and code checks the result."
     },
     {
+      "name": "browser_request_help",
+      "description": "Hand one step, such as a login or CAPTCHA, to the person at the browser and wait for it back."
+    },
+    {
       "name": "browser_tabs",
       "description": "List, open, switch and close tabs."
     },
