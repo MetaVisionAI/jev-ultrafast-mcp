@@ -1981,7 +1981,7 @@
     }
   ],
   "tables": {
-    "helper_version": 11,
+    "helper_version": 12,
     "threshold": 0.7,
     "modifiers": {
       "alt": 1,

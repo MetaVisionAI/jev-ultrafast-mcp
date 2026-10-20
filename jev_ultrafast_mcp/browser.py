@@ -42,7 +42,7 @@ HELPER_SRC = (Path(__file__).with_name("js") / "observer.js").read_text(encoding
 # The extension's constant was held to this one by `act-parity.mjs` and the
 # source's was held to nothing, which is how 7 here and 6 in the page survived a
 # release. `tests/test_helper_version.py` pins all three now.
-HELPER_VERSION = 11
+HELPER_VERSION = 12
 
 HELP_BINDING = "__jevHelp"
 HELP_POLL_MS = 500
@@ -972,7 +972,7 @@ class Session:
                 if dry_run:
                     return Step(op=op, ref=ref, target=target_label, ok=True, detail="dry run")
                 self._do_click(ref)
-                self._after_input(("options" if raw_op.get("kind") == "combobox" else "fast"))
+                self._after_input(self._settle_kind(raw_op))
 
             elif op == "type":
                 target_label = self._label(ref)
@@ -1414,6 +1414,16 @@ class Session:
         """
         found = self._safe_eval("window.__jevMcp.active()")
         return found if isinstance(found, dict) else {"unknown": True}
+
+    def _settle_kind(self, raw_op: dict) -> str:
+        """How long to wait after a click before the next read.
+
+        `picker`, `submit`, `create`, and `combobox` open a menu or a dialog.
+        `fast` returns before that paint. `popup` waits for it.
+        """
+        if raw_op.get("kind") in {"picker", "submit", "create", "combobox"}:
+            return "popup"
+        return "fast"
 
     def _after_input(self, settle_kind: str) -> None:
         """Settle in-page, then absorb a navigation if one was triggered."""

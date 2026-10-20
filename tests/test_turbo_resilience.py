@@ -548,6 +548,8 @@ class _FakeSession:
         # on that observation or the loop never hears about it.
         if scripted.get("new_tab"):
             self.last = dataclasses.replace(self.page, new_tabs=[scripted["new_tab"]])
+        if scripted.get("then_page") is not None:
+            self.page = scripted["then_page"]
         if self._streak >= browser.NO_CHANGE_LIMIT:
             payload["stuck"] = (
                 f"{self._streak} consecutive actions changed nothing. "
@@ -1265,3 +1267,96 @@ def test_a_tab_this_page_did_not_open_is_not_followed():
 
     assert session.follow_new_tab(dataclasses.replace(_observation(), new_tabs=[tabs["user-tab"]])) is None
     assert session.target_id == "messenger"
+
+
+def test_an_occluded_click_is_reread_and_the_goal_continues(monkeypatch):
+    """A cover is the page changing, not the goal ending.
+
+    The click is refused because a dialog landed on top of the target. The next
+    read is that dialog, and the goal acts on it instead of stopping.
+    """
+    dialog = dataclasses.replace(
+        _observation(),
+        text="向参与者发送日程邀请？",
+        elements=[Element(ref="e2", role="button", name="发送")],
+    )
+    session = _FakeSession([
+        {"ok": False, "error": "occluded", "page_changed": False, "then_page": dialog},
+        _ok(),
+    ])
+    sent = {"done": False}
+
+    def choose(_cfg, observation, _goal, _history):
+        if sent["done"]:
+            return {"operation": "DONE", "ref": None, "confidence": 0.9}
+        if any(element.name == "发送" for element in observation.elements):
+            sent["done"] = True
+            return {"operation": "CLICK", "ref": "e2", "target": "发送", "confidence": 0.9}
+        return {"operation": "CLICK", "ref": "e1", "target": "时间", "confidence": 0.9}
+
+    monkeypatch.setattr(server.policy, "available", lambda _cfg: True)
+    monkeypatch.setattr(server.policy, "choose", choose)
+    monkeypatch.setattr(server, "_session", lambda _name: session)
+
+    out = server.browser_goal("send the invite", max_steps=6, verbose=True)
+
+    assert "re-observing (occluded)" in out, out
+    assert "status: done" in out, out
+    assert [ops[0]["ref"] for ops in session.acts] == ["e1", "e2"]
+
+
+def test_the_same_ref_occluded_twice_ends_the_goal(monkeypatch):
+    """One re-read per ref. A second miss is a real failure, not another wait."""
+    session = _FakeSession([
+        {"ok": False, "error": "occluded", "page_changed": False},
+        {"ok": False, "error": "occluded", "page_changed": False},
+    ])
+
+    def choose(_cfg, _observation, _goal, _history):
+        return {"operation": "CLICK", "ref": "e1", "target": "时间", "confidence": 0.9}
+
+    monkeypatch.setattr(server.policy, "available", lambda _cfg: True)
+    monkeypatch.setattr(server.policy, "choose", choose)
+    monkeypatch.setattr(server, "_session", lambda _name: session)
+
+    out = server.browser_goal("send the invite", max_steps=6, verbose=True)
+
+    assert out.count("re-observing (occluded)") == 1, out
+    assert "failed:occluded" in out, out
+    assert len(session.acts) == 2
+
+
+def test_the_trace_marks_whether_the_page_changed(monkeypatch):
+    """A repeated click that did nothing has to be visible without inferring it."""
+    session = _FakeSession([_ok(), _still()])
+    decisions = [
+        {"operation": "CLICK", "ref": "e1", "confidence": 0.9},
+        {"operation": "CLICK", "ref": "e1", "confidence": 0.9},
+        {"operation": "DONE", "confidence": 0.9},
+    ]
+
+    out, _seen = _drive(monkeypatch, session, decisions)
+
+    assert "(0ms model / 1ms browser) Δ" in out, out
+    assert "(0ms model / 1ms browser) =" in out, out
+
+
+def test_a_picker_click_carries_its_kind(monkeypatch):
+    """The click wait depends on kind, which the decision does not repeat."""
+    session = _FakeSession([_ok()])
+    session.page = dataclasses.replace(_observation(), elements=[
+        Element(ref="e1", role="textbox", name="开始 时间", editable=True, kind="picker", value="14:00"),
+    ])
+
+    def choose(_cfg, _observation, _goal, _history):
+        if not session.acts:
+            return {"operation": "CLICK", "ref": "e1", "confidence": 0.9}
+        return {"operation": "DONE", "confidence": 0.9}
+
+    monkeypatch.setattr(server.policy, "available", lambda _cfg: True)
+    monkeypatch.setattr(server.policy, "choose", choose)
+    monkeypatch.setattr(server, "_session", lambda _name: session)
+
+    server.browser_goal("set the clock", max_steps=4, verbose=True)
+
+    assert session.acts[0][0]["kind"] == "picker"

@@ -275,3 +275,24 @@ def test_what_a_control_is_for_comes_from_the_component_not_its_label(origin, se
     assert native.get("城市") == "suggest"
     assert native.get("提交表单") == "submit"
     assert native.get("添加联系人或群") == ""
+
+
+@pytest.mark.skipif(not _chrome_available(), reason="no Chromium-family browser found")
+def test_a_submit_click_waits_for_a_dialog_that_appears_later(origin, session):
+    """The read after a submit has to include a dialog painted a few hundred milliseconds later.
+
+    `fast` returns after 50ms. This dialog is inserted at 300ms, so a read that
+    does not wait reports the page as it was before the click finished.
+    """
+    session.navigate(f"{origin}/late-popup.html")
+    before = _read(session)
+    save = _has(before, "button", "保存", exact=True)
+    assert save is not None, before.render()
+    assert _has(before, "button", "发送", exact=True) is None
+
+    session.last = before
+    session._fresh = True
+    clicked = session.act([{"op": "click", "ref": save.ref, "kind": "submit"}])
+
+    assert clicked["ok"], clicked
+    assert _has(session.last, "button", "发送", exact=True) is not None, session.last.render()

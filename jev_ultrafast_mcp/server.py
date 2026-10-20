@@ -525,6 +525,12 @@ def browser_macro(action: str, session: str = "default", name: str = "",
 # search area, taking the submit button's node with it.
 STALE_REF_REASONS = {"detached", "page_changed", "target_changed", "unknown_ref", "stale"}
 
+# A click that lands on a cover or below the fold is not a dead page. The next
+# read shows the dialog that covered it, or the same control once it has been
+# scrolled. One re-read per ref: a second miss is a real failure, and retrying
+# it is how a covered grid cell gets clicked forever.
+RE_READ_REASONS = {"occluded", "out_of_viewport"}
+
 # How many times one goal step may re-observe after its refs went stale. It is
 # per step, so a page that invalidates a ref once per step does not spend the
 # recovery budget of the steps after it. The goal as a whole gets the same
@@ -600,6 +606,7 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
         stale = 0        # re-observations spent on the step currently in flight
         recovered = 0    # re-observations spent by the goal as a whole
         re_read = False  # the one re-read allowed when the first answer is BLOCKED
+        reread_refs: set[str] = set()  # refs already re-read after a cover or a fold
         calls = 0        # decision requests, including the one that said DONE
         flaked = 0       # one malformed decision is asked again; a second one stops
         model_ms = 0     # time spent waiting on the decision model
@@ -692,6 +699,8 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
                 op["value"] = decision["value"]
             if operation == "SCROLL":
                 op["dir"] = "down"
+            if chosen is not None and chosen.kind:
+                op["kind"] = chosen.kind
             before = observation.by_ref.get(decision["ref"]) if decision.get("ref") else None
             steps += 1
             payload = tab.act([op], stop_on_error=False, observe_after=True)
@@ -709,17 +718,26 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
                              f"{stale}/{STALE_REF_RETRIES})")
                 observation = tab.observe()
                 continue
+            ref = decision.get("ref") or ""
+            if (error in RE_READ_REASONS and ref not in reread_refs and recovered < max_steps):
+                reread_refs.add(ref)
+                recovered += 1
+                steps -= 1
+                trace.append(f"  -   re-observing ({error})")
+                observation = tab.observe()
+                continue
             stale = 0
             browser_ms += step_result.get("ms") or 0
             typed_note = ""
             if isinstance(op.get("text"), str) and op["text"] and not (before and before.secret):
                 shown = op["text"] if len(op["text"]) <= 40 else op["text"][:39] + "…"
                 typed_note = f" “{shown}”"
+            moved = "Δ" if payload.get("page_changed") else "="
             trace.append(
                 f"  {steps}. {operation} {decision.get('ref') or ''} "
                 f"{decision.get('target') or ''}{typed_note} → "
                 f"{'ok' if step_result['ok'] else error} "
-                f"({decision.get('latency_ms', 0)}ms model / {step_result.get('ms', 0)}ms browser)"
+                f"({decision.get('latency_ms', 0)}ms model / {step_result.get('ms', 0)}ms browser) {moved}"
             )
             if step_result["ok"]:
                 observation = tab.last or tab.observe()

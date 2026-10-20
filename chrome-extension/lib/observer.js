@@ -26,7 +26,7 @@
   // satisfied, the server re-injected this whole file on every observation, and
   // a page holding the older helper was never actually upgraded, because the
   // early return fired on the number it already carried.
-  const VERSION = 11;
+  const VERSION = 12;
   try { if (W !== W.top) return; } catch (_) { return; }
   if (W.__jevMcp && W.__jevMcp.version === VERSION) return;
 
@@ -898,6 +898,43 @@
   };
 
   const settle = kind => new Promise(resolveDone => {
+    // A menu or dialog the click just asked for is not on the page yet. `fast`
+    // returns after two frames or 50ms, which is before the paint, so the next
+    // decision acts on whatever was underneath. `popup` waits until the DOM has
+    // been still for 150ms and never past 800ms, but not before 400ms: the
+    // click's own mutations would otherwise satisfy the quiet window, and a
+    // dialog scheduled a few hundred milliseconds out would be missed.
+    if (kind === 'popup') {
+      const started = performance.now();
+      let lastChange = started;
+      let stopped = false;
+      let timer = null;
+      const observer = document.body
+        ? new MutationObserver(() => { lastChange = performance.now(); })
+        : null;
+      const finish = () => {
+        if (stopped) return;
+        stopped = true;
+        if (observer) observer.disconnect();
+        clearTimeout(timer);
+        resolveDone();
+      };
+      if (observer) {
+        observer.observe(document.body, {
+          subtree: true, childList: true, attributes: true, characterData: true,
+        });
+      }
+      const tick = () => {
+        if (stopped) return;
+        const now = performance.now();
+        const elapsed = now - started;
+        const quiet = now - lastChange;
+        if (elapsed >= 800 || (elapsed >= 400 && quiet >= 150)) return finish();
+        timer = setTimeout(tick, 50);
+      };
+      timer = setTimeout(tick, 50);
+      return;
+    }
     let frames = 0, stopped = false;
     const finish = () => { if (!stopped) { stopped = true; resolveDone(); } };
     setTimeout(finish, kind === 'options' ? 200 : 50);

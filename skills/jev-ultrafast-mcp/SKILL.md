@@ -56,12 +56,11 @@ A passing `verify` can still be wrong, and a wrong pass is worse than a fail: th
 server upgrades `status` to `done`, and the host stops on work that is not saved.
 Two checks that look specific and are not:
 
-- `url_contains` matches a prefix. `/calendar/` is true of the editor
-  (`/calendar/eventedit`) as well as of the week view. Require the path that
-  exists only after the action, such as `/calendar/week`.
-- `text_contains` matches a draft. Feishu paints the unsaved title onto the
-  editor's side panel, so 「研发会议」 is on the page before 保存. The same
-  string on `/calendar/week`, after the editor has closed, is the saved event.
+- `url_contains` matches a prefix. A path that is also the prefix of the editor
+  passes before the save. Require the path that exists only after the action.
+- `text_contains` matches a draft. A form often paints the unsaved title into
+  the page before it is saved. A string that is on the page only after the
+  editor has closed is the saved result.
 
 Judge the handoff by `verified: PASS` **and** the final URL being the page that
 only exists once the action is done. `verified: PASS` while the URL is still the
@@ -69,24 +68,22 @@ editor means the checks were true too early. Rewrite `verify` and hand the goal
 over again. Do not finish the form yourself.
 
 A multi-field form needs the constraints in the `goal`, not only in `verify`, and
-it needs `max_steps` above the default 20 — 40 is the right start. For a clock
-time, name the field and the option value (`开始 时间` is the option whose value
-is `14:00`). A later field's dropdown repeats that clock time as a duration
-(`14:00 (3小时)`); say so, or the model clicks the duration. Say the save click
-is allowed only after those values are on the inputs. `browser_goal` already
-follows a tab the current page opens, so the goal must not click that entry again.
+it needs `max_steps` above the default 20 — 40 is the right start. Name the field
+and the option text the page shows. Two dropdowns for the same fact can label
+their options differently; write each option's text as it appears, not a rule
+that excludes a word. Say the save click is allowed only after those values are
+on the inputs. `browser_goal` already follows a tab the current page opens, so
+the goal must not click that entry again.
 
 A date field is set by clicking it and then the day. Typing into it opens the
 picker on the wrong month. A clock field is set by clicking it and then the
-option whose name is exactly that clock (`14:00`); an option whose name
-contains `小时` is a duration counted from the start clock. The editor's side
-grid repeats the name `时间`; those copies are not how the time is set. The
-people field is the one that is typed: name the person in the goal, then say
-to click the suggestion. A name the goal states is the value, and the text
-helper must return it rather than declining the field. The decision sees the last
-20 steps, including the text that was typed and whether the page changed, and
-`filled`, the current value of each editable field. A step the page did not
-answer is withdrawn after two tries, even when the model alternates targets.
+option whose name is the clock the goal asked for. The people field is the one
+that is typed: name the person in the goal, then say to click the suggestion. A
+name the goal states is the value, and the text helper must return it rather
+than declining the field. The decision sees the last 20 steps, including the
+text that was typed and whether the page changed, and `filled`, the current
+value of each editable field. A step the page did not answer is withdrawn after
+two tries, even when the model alternates targets.
 Each control carries a `kind` read from the page, not its label: `suggest`,
 `picker`, `submit`, `create`. After text is typed into a `suggest` field (the
 people box), the loop waits for its `option` rows, and a click on that field or
@@ -125,6 +122,7 @@ Exactly three cases:
 | Situation | Read |
 | --- | --- |
 | Login/CAPTCHA/OTP/consent/payment confirmation, two attempts without progress, or an operation error | [Human help and recovery](references/help-and-recovery.md) |
+| 操作飞书（任何功能） | [Feishu](references/feishu.md) |
 
 ## Recurring work: record it once, then replay for free
 

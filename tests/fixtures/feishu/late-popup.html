@@ -1,0 +1,10 @@
+<button type="button" id="save">保存</button>
+<div id="ask" hidden>
+  <p>向参与者发送日程邀请？</p>
+  <button type="button" id="send">发送</button>
+</div>
+<script>
+document.getElementById("save").addEventListener("click", () => {
+  setTimeout(() => { document.getElementById("ask").hidden = false; }, 300);
+});
+</script>
