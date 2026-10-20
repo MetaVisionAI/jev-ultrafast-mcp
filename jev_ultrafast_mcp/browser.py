@@ -42,7 +42,7 @@ HELPER_SRC = (Path(__file__).with_name("js") / "observer.js").read_text(encoding
 # The extension's constant was held to this one by `act-parity.mjs` and the
 # source's was held to nothing, which is how 7 here and 6 in the page survived a
 # release. `tests/test_helper_version.py` pins all three now.
-HELPER_VERSION = 9
+HELPER_VERSION = 10
 
 HELP_BINDING = "__jevHelp"
 HELP_POLL_MS = 500
@@ -133,6 +133,20 @@ class Step:
 # and consumed there, and a caller that stopped one step earlier than this
 # limit would be stopping on a page that had not had its chance.
 NO_CHANGE_LIMIT = 3
+
+
+def progress_streak(streak: int, *, changed: bool, clicked_editable: bool) -> int:
+    """How long the page has stood still, after one more action.
+
+    A click on an editable textbox focuses it and changes nothing else. That is
+    the step before typing, not a page that has stopped. Counting it here used
+    to end the goal on the third click, one step before the text was entered.
+    """
+    if changed:
+        return 0
+    if clicked_editable:
+        return streak
+    return streak + 1
 
 
 @dataclass
@@ -487,11 +501,28 @@ class Session:
         self._idle_deadline = time.monotonic() + self.cfg.settle_timeout
         self._wait_loaded()
         self._no_change_streak = 0
+        # `window.open` reports the tab while it is still `about:blank`, and
+        # that document loads instantly, so the wait above returns before the
+        # address the click asked for has been assigned. Handing that blank
+        # page to the model is a BLOCKED answer about a tab that is one
+        # navigation away from the calendar.
+        self._wait_until_addressed(chosen["target_id"])
         self._refresh_tabs()
         return next(
             (tab for tab in self.tabs if tab["target_id"] == chosen["target_id"]),
             chosen,
         )
+
+    def _wait_until_addressed(self, target_id: str) -> None:
+        """Poll until `target_id` has a real URL, or the settle budget runs out."""
+        deadline = time.monotonic() + self.cfg.settle_timeout
+        while time.monotonic() < deadline:
+            self._refresh_tabs()
+            current = next((tab for tab in self.tabs if tab["target_id"] == target_id), None)
+            url = (current or {}).get("url") or ""
+            if url and not url.startswith("about:"):
+                return
+            time.sleep(self.cfg.settle_poll_ms / 1000.0)
 
     def _await_tab(self, *, exclude: str = "", timeout: float = 3.0) -> dict | None:
         """Wait for a tab that is not `exclude` to be attachable.
@@ -746,7 +777,16 @@ class Session:
             if observation is not None:
                 previous = observation.previous
                 changed = previous is None or observation.digest != previous.digest
-                self._no_change_streak = 0 if changed else self._no_change_streak + 1
+                last = results[-1] if results else None
+                clicked_editable = False
+                if (not changed and last is not None and last.ok and last.op == "click"
+                        and last.ref):
+                    element = observation.by_ref.get(last.ref)
+                    if element is None and previous is not None:
+                        element = previous.by_ref.get(last.ref)
+                    clicked_editable = bool(element is not None and element.editable)
+                self._no_change_streak = progress_streak(
+                    self._no_change_streak, changed=changed, clicked_editable=clicked_editable)
                 payload["page_changed"] = changed
                 payload["view"] = observation.render(previous, mode="auto")
         if self._no_change_streak >= NO_CHANGE_LIMIT:
@@ -1475,9 +1515,15 @@ class BrowserManager:
             self.cfg, allow_extensions=self.allow_extensions)
 
     def session(self, name: str = "default") -> Session:
+        # `self.cdp` is what drops a dead socket and the sessions bound to it.
+        # Looking the session up first hands back target ids that belong to a
+        # socket that no longer answers, and every later goal fails with
+        # `transport closed`. The failure "the next call reconnects" was
+        # written to end.
+        cdp = self.cdp
         session = self._sessions.get(name)
         if session is None:
-            session = Session(name=name, cfg=self.cfg, cdp=self.cdp,
+            session = Session(name=name, cfg=self.cfg, cdp=cdp,
                               background=not self.cfg.foreground)
             session.start("about:blank")
             self._sessions[name] = session

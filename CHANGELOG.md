@@ -273,6 +273,27 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **A goal remembers what it typed, and a menu row scrolled out of its list stays choosable.**
+  Each decision is a fresh request. The only memory was the last ten steps as a verb, a ref and a
+  name, so a title typed ten times looked like ten unnamed clicks, and a loop that alternated
+  between the time field and the people field never reached three hits on one ref. The goal now
+  sends the last twenty steps with the text, whether the page changed, and the value afterwards,
+  plus `filled`, the current value of every editable field that holds one. Two steps the page did
+  not answer, or two clicks that left an editable value standing still, withdraw that target even
+  when another ref sits between them. A row scrolled out of its list was marked covered because the
+  hit test found the page behind the list, so `14:00` was never offered while `14:00 (2.5小时)` was.
+  Clipping by a scroll container is no longer a cover; a dialog still is. A portal row that the hit
+  test still calls covered is offered anyway, and the click scrolls it into view first.
+  `HELPER_VERSION` goes to 10. A click on an empty text field that is not a date or a
+  clock is carried out as typing: the model was clicking the people box to focus it, the page
+  did not change, and the name was never entered. A click on the field just typed into
+  selects the suggestion whose name starts with that text, and `icon-add` is not offered
+  again after that form has already been saved, which is how one booking became several copies.
+  After typing, the loop waits until the page changes before the next decision, because a
+  people search renders its rows after the keystrokes. 保存 while that row is still open
+  selects the row instead of storing the event with nobody invited. One malformed decision is asked
+  again instead of abandoning the form.
+
 - **`browser_goal` follows a tab the page it is driving just opened.** A click with `target=_blank`
   (Feishu's calendar entry is one: it leaves through `security.feishu.cn/link/safety` and the week
   view arrives in a new tab) does not change the page it was clicked on. The goal could see the new
@@ -283,6 +304,18 @@ All notable changes to this project are documented here. The format follows
   driving there. The page it leaves stays open. A tab the user opened, or another session opened, has
   a different opener and is not followed. `browser_act` still only reports the new tab; the switch
   stays the caller's, through `browser_tabs`.
+
+- **A tab a click just opened is not handed over while it is still `about:blank`.** `window.open` reports the tab before the address exists, and that blank document loads instantly, so the goal followed it, read an empty page, and answered BLOCKED one navigation away from the calendar. The follow now waits, within the settle budget, until the tab has an address. A BLOCKED answer on a page that is still `about:blank` is re-read once.
+
+- **A text helper that declines one field no longer ends the goal.** `{"text": null}` means the goal names no value for that field. It used to raise out of the loop, so a search box on the way to the form aborted the booking and the trace of the steps already taken was discarded. The field stays clickable and stops being offered for typing; the goal continues. A malformed answer still stops the run.
+
+- **A crowd of identical grid cells no longer spends the choice budget, and clicking an editable field no longer ends the goal.** The event editor paints the day's hours as dozens of cells that all answer to "时间". They sorted with the menu that just opened, so the cut dropped the option the goal had asked for and the model kept clicking the time field. Names shared by more than eight grid cells are now reduced to four before that cut. A click on an editable textbox focuses it and changes nothing else; counting those toward the no-change streak stopped the run on the third click, one step before the text was entered. That click no longer advances the streak. The decision rules say an editable textbox is filled with `TYPE_TEXT`.
+
+- **Asking for a session drops one bound to a dead socket.** `BrowserManager.cdp` already
+  rebuilt a socket that had died and threw away the sessions that held its target ids. The tools
+  never touch that property when a session is cached: `session()` returned the old object, and the
+  next `browser_goal` failed with `Page.navigate: transport closed` on the same dead socket the
+  doctor had just called dropped. Asking for the session now goes through that check first.
 
 - **`toggle` clicks, and the confirmation rail was attached to the op named `click`.** `_do_click` has
   exactly two callers and only one of them consulted `confirm_reason`, so

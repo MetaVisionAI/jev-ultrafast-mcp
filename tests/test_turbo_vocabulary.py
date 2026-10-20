@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 
 from jev_ultrafast_mcp import policy, server
-from jev_ultrafast_mcp.browser import CLICKABLE_KINDS
+from jev_ultrafast_mcp.browser import CLICKABLE_KINDS, progress_streak
 from jev_ultrafast_mcp.config import Config
 from jev_ultrafast_mcp.observe import Element, Observation
 
@@ -368,6 +368,149 @@ def test_a_retried_target_is_dropped_when_another_one_can_take_its_place():
     assert [element.ref for element in heads["CLICK"]] == ["e2"]
 
 
+def test_a_click_on_an_empty_text_field_is_really_typing():
+    """A date and a clock open a menu. A title or a people field wants text."""
+    people = Element(ref="e1", role="textbox", name="添加联系人或群", editable=True, value="")
+    title = Element(ref="e2", role="textbox", name="添加主题", editable=True, value="")
+    titled = Element(ref="e3", role="textbox", name="添加主题", editable=True, value="研发会议")
+    clock = Element(ref="e4", role="textbox", name="开始 时间", editable=True, value="")
+    day = Element(ref="e5", role="textbox", name="开始 日期", editable=True, value="")
+    search = Element(ref="e6", role="searchbox", name="Search", editable=True, value="")
+
+    assert policy.click_should_type(people) is True
+    assert policy.click_should_type(title) is True
+    assert policy.click_should_type(titled) is False
+    assert policy.click_should_type(clock) is False
+    assert policy.click_should_type(day) is False
+    assert policy.click_should_type(search) is False
+    assert policy.click_should_type(None) is False
+
+
+def test_a_typed_name_points_at_the_suggestion_not_the_calendar_chip():
+    """The row that starts with the text just typed is the one to click.
+
+    A chip that repeats the title next to a clock is the saved event, and
+    clicking it is not selecting an autocomplete suggestion.
+    """
+    people = Element(ref="e1", role="textbox", name="添加联系人或群", editable=True, value="杨飞")
+    person = Element(ref="e2", role="button", name="杨飞 技术部")
+    chip = Element(ref="e3", role="button", name="研发会议 , 14:00 - 14:30")
+    observation = _observation([people, person, chip])
+    history = [{"op": "type", "ref": "e1", "target": "添加联系人或群", "ok": True,
+                "text": "杨飞", "page_changed": True}]
+
+    assert policy.pending_suggestion(observation, history).ref == "e2"
+
+    history.append({"op": "click", "ref": "e2", "target": "杨飞 技术部", "ok": True,
+                    "page_changed": True})
+    assert policy.pending_suggestion(observation, history) is None
+
+
+def test_a_second_create_button_is_not_offered_after_the_form_was_saved():
+    """Each click of icon-add after 保存 was another copy of the same event."""
+    add = Element(ref="e9", role="button", name="icon-add")
+    other = Element(ref="e10", role="button", name="今天")
+    saved = [
+        {"op": "click", "ref": "e1", "target": "icon-add", "ok": True},
+        {"op": "click", "ref": "e2", "target": "保存", "ok": True},
+    ]
+
+    _, heads = policy._operation_heads(_observation([add, other]), saved)
+
+    assert [element.ref for element in heads["CLICK"]] == ["e10"]
+
+
+def test_a_menu_row_scrolled_out_of_its_list_is_still_offered():
+    """The hit test calls the row covered; the click scrolls it into view.
+
+    A long dropdown paints later hours under the page behind the list, so they
+    arrive `occluded`. Leaving them out is how `14:00` was never a choice while
+    the duration row above it was. A portal mark (`↳`) is what says the cover
+    is the list itself. A button under a dialog has no such mark and stays out.
+    """
+    hour = Element(ref="e14", role="option", name="14:00", occluded=True, context="↳ e9")
+    covered = Element(ref="e2", role="button", name="保存", occluded=True)
+    bare = Element(ref="e3", role="option", name="09:00", occluded=True)
+    visible = Element(ref="e4", role="button", name="取消")
+
+    _, heads = policy._operation_heads(_observation([hour, covered, bare, visible]))
+    offered = {element.ref for element in heads["CLICK"]}
+
+    assert "e14" in offered, "the scrolled option was dropped before the model could pick it"
+    assert "e4" in offered
+    assert "e2" not in offered and "e3" not in offered
+
+
+def test_two_steps_the_page_did_not_answer_stall_that_target():
+    """A quiet repeat is a loop at two, and the repeats need not be consecutive."""
+    quiet = {"op": "click", "ref": "e201", "ok": True, "page_changed": False}
+    other = {"op": "click", "ref": "e77", "ok": True, "page_changed": True}
+    history = [quiet, other, quiet]
+
+    assert policy.stalled_targets(history) == {"CLICK": {"e201"}}
+    assert policy.stalled_targets([quiet]) == {}
+
+
+def test_clicks_that_leave_a_field_unchanged_stall_even_when_the_page_moves():
+    """Opening the same dropdown again is not progress toward the value.
+
+    The menu appearing makes `page_changed` true, so the quiet rule does not
+    see it. The field's own value is what the goal asked to change, and two
+    clicks that leave it standing still — with another field in between — are
+    the loop the time box and the people box ran.
+    """
+    stuck = {"op": "click", "ref": "e201", "ok": True, "page_changed": True,
+             "value_unchanged": True}
+    other = {"op": "click", "ref": "e77", "ok": True, "page_changed": True,
+             "value_unchanged": True}
+    history = [stuck, other, stuck, other]
+
+    stalled = policy.stalled_targets(history)
+
+    assert stalled["CLICK"] == {"e201", "e77"}
+
+
+def test_a_remembered_step_keeps_the_text_and_drops_a_secret():
+    """The next decision has to see what was typed, not only which field."""
+    kept = policy.remember_step(
+        op="type", ref="e1", target="添加主题", ok=True, text="研发会议",
+        page_changed=True, value_before="", value_after="研发会议",
+    )
+    assert kept["text"] == "研发会议"
+    assert kept["page_changed"] is True
+    assert kept["value_after"] == "研发会议"
+    assert "value_unchanged" not in kept
+
+    secret = policy.remember_step(
+        op="type", ref="e2", target="密码", ok=True, text="hunter2",
+        page_changed=True, value_before="", value_after="hunter2", secret=True,
+    )
+    assert "text" not in secret and "value_after" not in secret
+
+    essay = policy.remember_step(
+        op="type", ref="e3", target="备注", ok=True, text="x" * 41, page_changed=True,
+    )
+    assert "text" not in essay
+
+
+def test_filled_lists_what_editable_fields_hold_and_skips_secrets():
+    fields = [
+        Element(ref="e1", role="textbox", name="添加主题", editable=True, value="研发会议"),
+        Element(ref="e2", role="textbox", name="密码", editable=True, value="hunter2", secret=True),
+        Element(ref="e3", role="textbox", name="添加地点", editable=True, value=""),
+        Element(ref="e4", role="textbox", name="开始 时间", editable=True, value="11:00"),
+        Element(ref="e5", role="textbox", name="开始 时间", editable=True, value="14:00"),
+    ]
+
+    filled = policy.filled_fields(_observation(fields))
+
+    assert filled["添加主题"] == "研发会议"
+    assert filled["开始 时间"] == "11:00"
+    assert filled["开始 时间 (e5)"] == "14:00"
+    assert "密码" not in filled
+    assert "添加地点" not in filled
+
+
 def test_a_retry_below_the_threshold_is_left_alone():
     """Two repeats can be an ordinary two-step control; three are a loop.
 
@@ -437,6 +580,39 @@ def test_position_still_separates_candidates_inside_a_tier():
     ordered = sorted([below_fold, on_screen], key=policy._reachability)
 
     assert [element.ref for element in ordered] == ["e1", "e2"]
+
+
+def test_a_crowd_of_identical_grid_cells_does_not_crowd_out_the_menu():
+    """The editor's hour grid is dozens of cells that all answer to one name.
+
+    They sort with the menu that just opened, and the cut then spends its
+    budget on the copies. The option the goal asked for is the one that has to
+    survive. A day number is not a crowd, so a handful of cells that share a
+    name is left alone.
+    """
+    hours = [Element(ref=f"e{i}", role="gridcell", name="时间") for i in range(1, 41)]
+    option = Element(ref="e100", role="option", name="14:00")
+    days = [Element(ref=f"e{200 + i}", role="gridcell", name=str(i)) for i in range(1, 6)]
+
+    kept = policy.reachable_first([*hours, option, *days], limit=20)
+    refs = [element.ref for element in kept]
+
+    assert "e100" in refs, "the time option lost its place to identical hour cells"
+    assert sum(1 for element in kept if element.name == "时间") == 4
+    assert all(f"e{200 + i}" in refs for i in range(1, 6))
+
+
+def test_clicking_an_editable_field_is_not_the_page_standing_still():
+    """Three clicks on a textbox used to end the goal one step before the typing.
+
+    Focusing the field changes nothing on the page. That is the step before
+    TYPE_TEXT, so it does not advance the streak that stops the run. A click
+    that changes nothing on anything else still does.
+    """
+    assert progress_streak(0, changed=False, clicked_editable=True) == 0
+    assert progress_streak(2, changed=False, clicked_editable=True) == 2
+    assert progress_streak(2, changed=True, clicked_editable=True) == 0
+    assert progress_streak(2, changed=False, clicked_editable=False) == 3
 
 
 def test_a_control_outranks_a_menu_item_that_happens_to_be_on_screen():

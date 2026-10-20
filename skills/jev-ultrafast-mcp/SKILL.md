@@ -52,6 +52,44 @@ on them with `text_contains` fails on a page that is exactly right. Assert on
 things that appear in the text: a price, a result count, a heading. So "the ticket
 type is now One way" is not a `text_contains` check; "SGD 133" is.
 
+A passing `verify` can still be wrong, and a wrong pass is worse than a fail: the
+server upgrades `status` to `done`, and the host stops on work that is not saved.
+Two checks that look specific and are not:
+
+- `url_contains` matches a prefix. `/calendar/` is true of the editor
+  (`/calendar/eventedit`) as well as of the week view. Require the path that
+  exists only after the action, such as `/calendar/week`.
+- `text_contains` matches a draft. Feishu paints the unsaved title onto the
+  editor's side panel, so 「研发会议」 is on the page before 保存. The same
+  string on `/calendar/week`, after the editor has closed, is the saved event.
+
+Judge the handoff by `verified: PASS` **and** the final URL being the page that
+only exists once the action is done. `verified: PASS` while the URL is still the
+editor means the checks were true too early. Rewrite `verify` and hand the goal
+over again. Do not finish the form yourself.
+
+A multi-field form needs the constraints in the `goal`, not only in `verify`, and
+it needs `max_steps` above the default 20 — 40 is the right start. For a clock
+time, name the field and the option value (`开始 时间` is the option whose value
+is `14:00`). A later field's dropdown repeats that clock time as a duration
+(`14:00 (3小时)`); say so, or the model clicks the duration. Say the save click
+is allowed only after those values are on the inputs. `browser_goal` already
+follows a tab the current page opens, so the goal must not click that entry again.
+
+A date field is set by clicking it and then the day. Typing into it opens the
+picker on the wrong month. A clock field is set by clicking it and then the
+option whose name is exactly that clock (`14:00`); an option whose name
+contains `小时` is a duration counted from the start clock. The editor's side
+grid repeats the name `时间`; those copies are not how the time is set. The
+people field is the one that is typed: name the person in the goal, then say
+to click the suggestion. A name the goal states is the value, and the text
+helper must return it rather than declining the field. The decision sees the last
+20 steps, including the text that was typed and whether the page changed, and
+`filled`, the current value of each editable field. A step the page did not
+answer is withdrawn after two tries, even when the model alternates targets.
+After a name is typed, the loop waits for the suggestion list and clicks the
+row whose name starts with that text before it will save.
+
 ## Reading a page is not a task
 
 `browser_open`, `browser_observe` and `browser_assert` are direct, deterministic,
@@ -218,8 +256,9 @@ Two signatures that look like engine bugs but are not:
   typing is needed at all. Adding `hl=en` (or the site's locale parameter) also
   makes the page easier to read and to assert on.
 
-Judge a handoff by `verified: PASS` **and** the final URL actually having changed —
-not by `status`.
+Judge a handoff by `verified: PASS` and by the final URL being the page that exists
+only after the action — a URL that merely changed can still be the editor. Not by
+`status`.
 
 **`status: unconfirmed: …` means the model reported `done` and `verify` did not confirm it.** The
 assertion wins, so treat it as unfinished — but check your own string first, because a wrong
@@ -246,11 +285,14 @@ optional.
   you must restart the client (and in WorkBuddy, click **Trust** again if you
   added or removed an env *key name* — values alone do not change the approval).
 - **A dropped socket is self-healing, and no longer needs a restart.** The manager
-  checks liveness before each call and, on a dead socket, drops it *together with
+  checks liveness when a tool asks for its session — not only when something
+  reads the socket directly — and, on a dead socket, drops it *together with
   the sessions bound to it* (a target id exists only on the socket that minted it)
   and opens a fresh one. `doctor` shows `connection: dropped` for that case instead
-  of a stale `connected: true`. If `transport closed … keepalive ping timeout`
-  nevertheless stays permanent, the server predates that fix — restart it.
+  of a stale `connected: true`. A goal that answers `transport closed … keepalive
+  ping timeout` is that case: hand the same goal over again. Do not finish the
+  page yourself. If the second handoff dies the same way, the server predates
+  this check — restart it.
 - **Login state lives in the browser profile**, not in the server. A task behind
   a login only works while that profile is signed in.
 

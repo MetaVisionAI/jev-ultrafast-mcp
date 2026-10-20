@@ -227,3 +227,23 @@ def test_a_popup_that_appears_after_a_click_names_the_control_that_opened_it(ori
     assert f"↳ {opener.ref}" in opened.context
     still = _has(after, "option", "已在", exact=True)
     assert still is not None and "↳" not in still.context
+
+
+@pytest.mark.skipif(not _chrome_available(), reason="no Chromium-family browser found")
+def test_a_row_scrolled_out_of_its_list_is_not_called_covered(origin, session):
+    """Overflow clipping is not a dialog. A button under another box still is.
+
+    The later hour of a time menu sits below the list's box, so the hit test
+    finds the page behind it. Marking that row covered drops it from the
+    question, and the model is left with the duration row it can already see.
+    """
+    session.navigate(f"{origin}/scroll-menu.html")
+    feishu = _read(session, "feishu")
+    early = _has(feishu, "option", "00:00", exact=True)
+    late = _has(feishu, "option", "14:00", exact=True)
+    covered = _has(feishu, "button", "被盖住", exact=True)
+
+    assert early is not None and late is not None and covered is not None, feishu.render()
+    assert early.occluded is False
+    assert late.occluded is False, feishu.render()
+    assert covered.occluded is True

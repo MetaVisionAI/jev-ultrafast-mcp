@@ -26,7 +26,7 @@
   // satisfied, the server re-injected this whole file on every observation, and
   // a page holding the older helper was never actually upgraded, because the
   // early return fired on the number it already carried.
-  const VERSION = 9;
+  const VERSION = 10;
   try { if (W !== W.top) return; } catch (_) { return; }
   if (W.__jevMcp && W.__jevMcp.version === VERSION) return;
 
@@ -295,6 +295,32 @@
   // each ancestor rejects a popup that is actually on screen: the portal is
   // `visibility: hidden` and the panel inside it sets `visibility: visible`.
   // Shadow hosts are still checked, because `checkVisibility` stops at the root.
+  // The centre sits outside a scrollable ancestor's visible box. Overflow
+  // clipping is not a cover: `elementFromPoint` then hits whatever is behind
+  // the list, and a scroll brings the row back. A dialog that paints on top
+  // of a row whose centre is inside every scroll box is a real cover.
+  const clippedByScroll = (e, cx, cy) => {
+    let n = e.parentElement;
+    const view = e.ownerDocument && e.ownerDocument.defaultView;
+    while (n && n.nodeType === 1) {
+      let style = null;
+      try { style = view && view.getComputedStyle(n); } catch (_) { style = null; }
+      if (style) {
+        const scrolls = (axis, size, client) => (
+          (axis === 'auto' || axis === 'scroll' || axis === 'hidden') && size > client + 1
+        );
+        if (scrolls(style.overflowY, n.scrollHeight, n.clientHeight)
+            || scrolls(style.overflowX, n.scrollWidth, n.clientWidth)) {
+          const b = n.getBoundingClientRect();
+          if (cx < b.left + 1 || cx > b.right - 1 || cy < b.top + 1 || cy > b.bottom - 1) return true;
+        }
+      }
+      if (n === e.ownerDocument.documentElement) break;
+      n = n.parentElement;
+    }
+    return false;
+  };
+
   const deepVisible = e => {
     let n = e;
     while (n && n.nodeType === 1) {
@@ -620,6 +646,11 @@
           else {
             const hit = deepElementFromPoint(doc, lx, ly);
             occluded = !(hit && (hit === e || e.contains(hit) || hit.contains(e)));
+            // A row scrolled out of its list fails the hit test because the
+            // page behind the list paints at that point. That is not a dialog
+            // covering it: the click scrolls the row into view. Calling it
+            // covered is how a dropdown's later options were never offered.
+            if (occluded && clippedByScroll(e, lx, ly)) occluded = false;
           }
         } catch (_) { occluded = false; }
       }
