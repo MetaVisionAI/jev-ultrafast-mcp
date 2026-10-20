@@ -58,6 +58,10 @@ class Element:
     # submit. `policy` leaves these out of the operations it offers, so seeing
     # one costs nothing but tells the model what the page is waiting for.
     disabled: bool = False
+    # What the control is for, when the page says so: `suggest` (typing opens a
+    # list to pick from), `picker` (a click opens a menu that sets the value),
+    # `submit`, `create`. The goal loop keys on this, never on a label.
+    kind: str = ""
 
     @property
     def code(self) -> str:
@@ -84,6 +88,7 @@ class Element:
             label=_short(raw.get("label") or "", 160),
             hoverable=bool(raw.get("hoverable")),
             disabled=bool(raw.get("disabled")),
+            kind=raw.get("kind") or "",
             # The observer reports this as `inViewport`. Dropping it left `in_viewport`
             # permanently True, so the `»` flag never rendered even though the header
             # advertises it and counts the same elements in `offscreen`.

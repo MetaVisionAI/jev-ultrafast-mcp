@@ -247,3 +247,31 @@ def test_a_row_scrolled_out_of_its_list_is_not_called_covered(origin, session):
     assert early.occluded is False
     assert late.occluded is False, feishu.render()
     assert covered.occluded is True
+
+
+@pytest.mark.skipif(not _chrome_available(), reason="no Chromium-family browser found")
+def test_what_a_control_is_for_comes_from_the_component_not_its_label(origin, session):
+    """The goal loop keys on `kind`. A label in one language would miss the next site.
+
+    A `_selection` that searches as you type is `suggest`; any other one is
+    a `picker` set from its menu. The primary button submits; `icon-add`
+    creates. Outside the component vocabulary the HTML says the same things.
+    """
+    session.navigate(f"{origin}/editor-kinds.html")
+    feishu = _read(session, "feishu")
+    kinds = {element.name: element.kind for element in feishu.elements}
+
+    assert kinds.get("添加联系人或群") == "suggest", feishu.render()
+    assert kinds.get("添加主题") == ""
+    assert kinds.get("保存") == "submit"
+    assert kinds.get("icon-add") == "create"
+    pickers = [element for element in feishu.elements
+               if element.editable and element.value in {"2026年10月20日", "12:00"}]
+    assert len(pickers) == 2 and all(element.kind == "picker" for element in pickers), feishu.render()
+
+    plain = _read(session)
+    native = {element.name: element.kind for element in plain.elements}
+    assert native.get("日期") == "picker", plain.render()
+    assert native.get("城市") == "suggest"
+    assert native.get("提交表单") == "submit"
+    assert native.get("添加联系人或群") == ""

@@ -128,21 +128,23 @@ def _brief(observation: Observation) -> str:
             f"{observation.reachable} reachable, obs#{observation.sequence}")
 
 
-def _await_menu(tab, observation: Observation, timeout: float = 1.6) -> Observation:
-    """Re-read until a type's follow-up menu arrives, or the wait runs out.
+def _await_suggestions(tab, observation: Observation, timeout: float = 2.0) -> Observation:
+    """After typing into a `suggest` field, re-read until a new option row appears.
 
-    Search results are a network round trip behind the keystrokes. The
-    observation captured with the type itself still shows the field and not
-    the rows, so the next decision clicks the field again.
+    Search results are a network round trip behind the keystrokes, so the
+    observation taken with the type shows the field and not the rows. Any
+    change is not enough: a spinner or the field's own value changes first.
     """
+    known = {element.ref for element in observation.elements if element.role == "option"}
     deadline = time.monotonic() + timeout
-    digest = observation.digest
     while time.monotonic() < deadline:
         time.sleep(min(0.15, max(0.0, deadline - time.monotonic())))
         nxt = tab.observe()
-        if nxt is not None and nxt.digest != digest:
+        if nxt is not None and any(
+                element.role == "option" and element.ref not in known and not element.disabled
+                for element in nxt.elements):
             return nxt
-    return observation
+    return tab.last or observation
 
 
 def _first_read(tab) -> Observation:
@@ -550,6 +552,7 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
         tokens = 0
         while steps < max_steps:
             history = memory[-20:]
+            policy.retire_create(observation, memory)
             for ref in declined_refs:
                 declined = observation.by_ref.get(ref)
                 if declined is not None:
@@ -563,9 +566,10 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
                 # from done from one that never started. One malformed envelope
                 # is a flake; asking again is cheaper than abandoning a form
                 # that is already filled in.
-                if flaked < 1 and "malformed" in str(exc):
+                if flaked < 1 and isinstance(exc, policy.MalformedAnswer):
                     flaked += 1
-                    trace.append(f"  -   {exc}; asking again")
+                    calls += 1
+                    trace.append(f"  -   {exc} Asking again.")
                     continue
                 status = f"turbo_unavailable: {exc}"
                 trace.append(f"  !   step {steps + 1}: {exc}")
@@ -599,16 +603,15 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
             chosen = observation.by_ref.get(decision["ref"]) if decision.get("ref") else None
             suggestion = policy.pending_suggestion(observation, memory)
             typed_ref = policy.pending_type_ref(memory)
-            target_name = decision.get("target") or ""
-            submitting = target_name in {"保存", "提交", "Save", "Submit"} or target_name.endswith("保存")
+            submitting = chosen is not None and chosen.kind == "submit"
             if operation == "CLICK" and suggestion is not None and (
                     decision.get("ref") == typed_ref or submitting):
-                # The model clicks the field it just typed into, or it submits
-                # while that row is still on the page. Either one leaves the
-                # person unselected. Click the row.
+                # Text typed into a `suggest` field is not a value until its row
+                # is chosen. Clicking the field again closes the list, and
+                # submitting now saves the form without it.
                 trace.append(
                     f"  -   choosing {suggestion.ref} {suggestion.name} "
-                    f"instead of {decision.get('ref')} {target_name}"
+                    f"instead of {decision.get('ref')} {decision.get('target') or ''}"
                 )
                 decision = {**decision, "ref": suggestion.ref, "target": suggestion.name}
                 op["ref"] = suggestion.ref
@@ -655,7 +658,8 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
             browser_ms += step_result.get("ms") or 0
             typed_note = ""
             if isinstance(op.get("text"), str) and op["text"] and not (before and before.secret):
-                typed_note = f" “{op['text']}”"
+                shown = op["text"] if len(op["text"]) <= 40 else op["text"][:39] + "…"
+                typed_note = f" “{shown}”"
             trace.append(
                 f"  {steps}. {operation} {decision.get('ref') or ''} "
                 f"{decision.get('target') or ''}{typed_note} → "
@@ -675,6 +679,7 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
                 value_before=None if before is None or before.secret else before.value,
                 value_after=None if after is None or after.secret else after.value,
                 secret=bool(before is not None and before.secret),
+                kind=before.kind if before is not None else "",
             ))
             if not step_result["ok"]:
                 status = f"failed:{error}"
@@ -703,13 +708,8 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
                 trace.append(f"  !   {payload['stuck']}")
                 status = "stopped: no progress"
                 break
-            if (operation == "TYPE_TEXT" and isinstance(op.get("text"), str)
-                    and not (before is not None and before.secret)):
-                # The snapshot taken with the keystrokes does not yet contain
-                # the search results. Deciding against it is how a typed name
-                # was followed by a click on the field, and the person was never
-                # chosen. Wait until the page actually changes, then decide.
-                observation = _await_menu(tab, observation)
+            if operation == "TYPE_TEXT" and before is not None and before.kind == "suggest":
+                observation = _await_suggestions(tab, observation)
         else:
             status = f"stopped: hit max_steps={max_steps}"
 

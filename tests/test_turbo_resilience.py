@@ -140,19 +140,79 @@ def test_the_decision_is_shown_the_text_already_typed_and_what_the_form_holds(mo
     assert state["filled"] == {"添加主题": "研发会议"}
 
 
-def test_a_typed_query_is_re_read_once_the_menu_arrives():
+class _Reads:
+    """A page whose successive reads are scripted; the last one repeats."""
+
+    def __init__(self, *pages: Observation):
+        self.pages = list(pages)
+        self.reads = 0
+        self.last = None
+
+    def observe(self):
+        self.reads += 1
+        page = self.pages.pop(0) if len(self.pages) > 1 else self.pages[0]
+        self.last = page
+        return page
+
+
+def test_after_typing_a_name_the_loop_waits_for_its_option_row():
     """The people list is not in the snapshot taken with the keystrokes."""
-    early = _observation()
-    late = dataclasses.replace(_observation(), digest="menu")
-    seen: list[str] = []
+    field = Element(ref="e1", role="textbox", name="People", editable=True, kind="suggest")
+    early = dataclasses.replace(_observation(), elements=[field])
+    spinner = dataclasses.replace(early, digest="spinner")
+    rows = dataclasses.replace(early, elements=[field, Element(ref="e2", role="option",
+                                                               name="杨飞 技术部")])
+    page = _Reads(spinner, rows)
 
-    class _Page:
-        def observe(self):
-            seen.append("observe")
-            return late
+    got = server._await_suggestions(page, early, timeout=1.0)
 
-    assert server._await_menu(_Page(), early, timeout=0.5).digest == "menu"
-    assert seen == ["observe"]
+    assert [element.ref for element in got.elements] == ["e1", "e2"]
+    assert page.reads == 2, "a spinner is a change, not the rows"
+
+
+def test_waiting_for_rows_gives_up_without_them():
+    field = Element(ref="e1", role="textbox", name="People", editable=True, kind="suggest")
+    early = dataclasses.replace(_observation(), elements=[field])
+    page = _Reads(early)
+
+    assert server._await_suggestions(page, early, timeout=0.3) is early
+
+
+def _suggest_page(*extra: Element) -> tuple[Observation, Observation]:
+    """A people field before typing, and the same page once its rows arrived."""
+    empty = Element(ref="e1", role="textbox", name="People", editable=True, kind="suggest")
+    typed = dataclasses.replace(empty, value="杨飞")
+    person = Element(ref="e2", role="option", name="杨飞 技术部")
+    before = dataclasses.replace(_observation(), elements=[empty, *extra])
+    after = dataclasses.replace(_observation(), elements=[typed, person, *extra], digest="rows")
+    return before, after
+
+
+def _scripted_reads(session: "_FakeSession", before: Observation, after: Observation) -> None:
+    """Reads show `before` until something has been acted on, then `after`."""
+    def observe(**_kwargs):
+        session.events.append("observe")
+        session.last = after if session.acts else before
+        return session.last
+    session.page = before
+    session.observe = observe
+
+
+def _goal_with(monkeypatch, session, decisions):
+    queue = list(decisions)
+
+    def fake_choose(_cfg, _observation, _goal, _history):
+        return queue.pop(0) if queue else {"operation": "DONE", "confidence": 0.9}
+
+    monkeypatch.setattr(server.policy, "available", lambda _cfg: True)
+    monkeypatch.setattr(server.policy, "choose", fake_choose)
+    monkeypatch.setattr(server.policy, "text_for", lambda *_args, **_kwargs: "杨飞")
+    monkeypatch.setattr(server, "_session", lambda _name: session)
+    return server.browser_goal("invite the person", max_steps=4, verbose=True)
+
+
+def _type_people() -> dict:
+    return {"operation": "TYPE_TEXT", "ref": "e1", "confidence": 0.9, "target": "People"}
 
 
 def test_one_malformed_decision_is_asked_again(monkeypatch):
@@ -163,7 +223,7 @@ def test_one_malformed_decision_is_asked_again(monkeypatch):
     def fake_choose(_cfg, _observation, _goal, _history):
         calls["n"] += 1
         if calls["n"] == 1:
-            raise policy.TurboUnavailable("Decision model returned a malformed answer; no action executed.")
+            raise policy.MalformedAnswer("Decision model returned a malformed answer; no action executed.")
         return {"operation": "DONE", "confidence": 0.9}
 
     monkeypatch.setattr(server.policy, "available", lambda _cfg: True)
@@ -173,97 +233,81 @@ def test_one_malformed_decision_is_asked_again(monkeypatch):
     out = server.browser_goal("finish the form", max_steps=3, verbose=True)
 
     assert "status: done" in out, out
-    assert "asking again" in out
-    assert calls["n"] == 2
+    assert "Asking again." in out
+    assert "turbo: 2 decisions" in out, "the request that failed was still a request"
 
 
-def test_saving_while_a_suggestion_is_open_selects_it_first(monkeypatch):
-    """保存 while the person row is on screen was storing the event with nobody invited."""
-    field = Element(ref="e1", role="textbox", name="添加联系人或群", editable=True, value="杨飞")
-    person = Element(ref="e2", role="option", name="杨飞 技术部")
-    save = Element(ref="e3", role="button", name="保存")
-    session = _FakeSession([_ok(), _ok()])
-    opened = dataclasses.replace(
-        _observation(), elements=[field, person, save], digest="menu",
-    )
-    session.page = opened
-
-    def observe(**_kwargs):
-        session.events.append("observe")
-        session.last = opened
-        return opened
-
-    session.observe = observe
+def test_a_provider_outage_is_not_retried_as_a_flake(monkeypatch):
+    session = _FakeSession([])
     calls = {"n": 0}
 
     def fake_choose(_cfg, _observation, _goal, _history):
         calls["n"] += 1
-        if calls["n"] == 1:
-            return {"operation": "TYPE_TEXT", "ref": "e1", "confidence": 0.9,
-                    "target": "添加联系人或群"}
-        if calls["n"] == 2:
-            return {"operation": "CLICK", "ref": "e3", "confidence": 0.9, "target": "保存"}
-        return {"operation": "DONE", "confidence": 0.9}
+        raise policy.TurboUnavailable("Decision model unreachable; no action executed.")
 
     monkeypatch.setattr(server.policy, "available", lambda _cfg: True)
     monkeypatch.setattr(server.policy, "choose", fake_choose)
-    monkeypatch.setattr(server.policy, "text_for", lambda *_args, **_kwargs: "杨飞")
     monkeypatch.setattr(server, "_session", lambda _name: session)
 
-    out = server.browser_goal("invite the person", max_steps=4, verbose=True)
+    out = server.browser_goal("finish the form", max_steps=3, verbose=True)
+
+    assert "turbo_unavailable" in out
+    assert calls["n"] == 1
+
+
+def test_submitting_while_a_suggestion_is_open_selects_it_first(monkeypatch):
+    """Submit while the person row is on screen stored the event with nobody invited."""
+    save = Element(ref="e3", role="button", name="Save", kind="submit")
+    session = _FakeSession([_ok(), _ok()])
+    _scripted_reads(session, *_suggest_page(save))
+
+    out = _goal_with(monkeypatch, session, [
+        _type_people(),
+        {"operation": "CLICK", "ref": "e3", "confidence": 0.9, "target": "Save"},
+    ])
 
     assert "status: done" in out, out
     assert session.acts[1][0] == {"op": "click", "ref": "e2"}, session.acts
 
 
+def test_a_button_that_is_not_submit_is_left_to_the_model(monkeypatch):
+    """Only `kind=submit` is redirected; any other click is the model's own call."""
+    other = Element(ref="e3", role="button", name="Save draft")
+    session = _FakeSession([_ok(), _ok()])
+    _scripted_reads(session, *_suggest_page(other))
+
+    out = _goal_with(monkeypatch, session, [
+        _type_people(),
+        {"operation": "CLICK", "ref": "e3", "confidence": 0.9, "target": "Save draft"},
+    ])
+
+    assert "status: done" in out, out
+    assert session.acts[1][0] == {"op": "click", "ref": "e3"}, session.acts
+
+
 def test_a_click_on_the_field_just_typed_selects_the_suggestion(monkeypatch):
     """Typing the name and then clicking the box was closing the list."""
-    field = Element(ref="e1", role="textbox", name="添加联系人或群", editable=True, value="杨飞")
-    person = Element(ref="e2", role="button", name="杨飞 技术部")
     session = _FakeSession([_ok(), _ok()])
-    session.page = dataclasses.replace(_observation(), elements=[field, person])
-    calls = {"n": 0}
+    _scripted_reads(session, *_suggest_page())
 
-    def fake_choose(_cfg, _observation, _goal, _history):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return {"operation": "TYPE_TEXT", "ref": "e1", "confidence": 0.9,
-                    "target": "添加联系人或群"}
-        if calls["n"] == 2:
-            return {"operation": "CLICK", "ref": "e1", "confidence": 0.9,
-                    "target": "添加联系人或群"}
-        return {"operation": "DONE", "confidence": 0.9}
-
-    monkeypatch.setattr(server.policy, "available", lambda _cfg: True)
-    monkeypatch.setattr(server.policy, "choose", fake_choose)
-    monkeypatch.setattr(server.policy, "text_for", lambda *_args, **_kwargs: "杨飞")
-    monkeypatch.setattr(server, "_session", lambda _name: session)
-
-    out = server.browser_goal("invite the person", max_steps=4, verbose=True)
+    out = _goal_with(monkeypatch, session, [
+        _type_people(),
+        {"operation": "CLICK", "ref": "e1", "confidence": 0.9, "target": "People"},
+    ])
 
     assert "status: done" in out, out
     assert session.acts[1][0] == {"op": "click", "ref": "e2"}, session.acts
     assert "choosing e2 杨飞 技术部" in out
 
 
-def test_clicking_an_empty_text_field_types_the_goal_s_value(monkeypatch):
+def test_clicking_an_empty_suggest_field_types_the_goal_s_value(monkeypatch):
     """The people box was clicked twice and the name was never entered."""
     session = _FakeSession([_ok()])
-    session.page = dataclasses.replace(_observation(), elements=[
-        Element(ref="e1", role="textbox", name="添加联系人或群", editable=True, value=""),
+    _scripted_reads(session, *_suggest_page())
+
+    out = _goal_with(monkeypatch, session, [
+        {"operation": "CLICK", "ref": "e1", "confidence": 0.9, "target": "People"},
     ])
-
-    def fake_choose(_cfg, _observation, _goal, _history):
-        if not session.acts:
-            return {"operation": "CLICK", "ref": "e1", "confidence": 0.9, "target": "Search"}
-        return {"operation": "DONE", "confidence": 0.9}
-
-    monkeypatch.setattr(server.policy, "available", lambda _cfg: True)
-    monkeypatch.setattr(server.policy, "choose", fake_choose)
-    monkeypatch.setattr(server.policy, "text_for", lambda *_args, **_kwargs: "杨飞")
-    monkeypatch.setattr(server, "_session", lambda _name: session)
-
-    out = server.browser_goal("invite the person", max_steps=4, verbose=True)
 
     assert "status: done" in out, out
     assert session.acts[0][0]["op"] == "type", session.acts

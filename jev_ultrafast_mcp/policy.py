@@ -155,6 +155,14 @@ class TurboUnavailable(RuntimeError):
     pass
 
 
+class MalformedAnswer(TurboUnavailable):
+    """The decision came back in a shape the contract does not allow.
+
+    One of these is usually a flake on the route, so the goal loop asks once
+    more. A provider that is down or a key that was refused is not this.
+    """
+
+
 class TextDeclined(TurboUnavailable):
     """The helper answered `{"text": null}`: the goal names no value for this field.
 
@@ -229,13 +237,13 @@ def _answers(result: object, question_id: str) -> dict:
     """
     answers = result.get("answers") if isinstance(result, dict) else None
     if not isinstance(answers, dict):
-        raise TurboUnavailable(
+        raise MalformedAnswer(
             "Decision model answered without an 'answers' object; no action executed. "
             f"Response keys: {_shape(result)}"
         )
     answer = answers.get(question_id)
     if not isinstance(answer, dict):
-        raise TurboUnavailable(
+        raise MalformedAnswer(
             f"Decision model answered no {question_id!r} question; no action executed. "
             f"Questions answered: {_shape(answers)}"
         )
@@ -256,7 +264,7 @@ def _validate(answer: dict, ids: set[str]) -> dict:
     """
     probabilities = answer.get("probabilities")
     if not isinstance(probabilities, dict):
-        raise TurboUnavailable("Decision model returned a malformed answer; no action executed.")
+        raise MalformedAnswer("Decision model returned a malformed answer; no action executed.")
     try:
         numbers = [*probabilities.values(), answer["confidence"]]
         valid = (
@@ -269,44 +277,42 @@ def _validate(answer: dict, ids: set[str]) -> dict:
     except (KeyError, TypeError, ValueError):
         valid = False
     if not valid:
-        raise TurboUnavailable("Decision model returned a malformed answer; no action executed.")
+        raise MalformedAnswer("Decision model returned a malformed answer; no action executed.")
     return answer
 
 
 def click_should_type(element) -> bool:
-    """An empty text field is filled by typing. A click does not enter the value.
+    """An empty field that opens suggestions as you type is filled by typing.
 
-    A date or a clock is the exception: those open a menu, and typing into them
-    does not set the value. A field that already holds text is left alone, so a
-    second click can mean "open the suggestions" rather than "type it again".
-    Only a title or a people field: clicking a generic search box is how a
-    page opens its own results, and turning that into typing breaks it.
+    The model clicks such a box to focus it, the page does not change, and the
+    name is never entered. Only `suggest` fields: a click on a plain search box
+    can be how a page opens its own results, and a `picker` is set from its menu.
     """
     if element is None or not element.editable or element.secret or element.value:
         return False
-    name = element.name or ""
-    if "时间" in name or "日期" in name:
-        return False
-    return "联系人" in name or "添加主题" in name
+    return element.kind == "suggest"
 
 
 def pending_type_ref(history: list[dict]) -> str | None:
-    """The field typed into most recently, until something is clicked after it."""
+    """The `suggest` field typed into most recently, until something is clicked after it."""
     for step in reversed(history):
         if not step.get("ok"):
             continue
-        if step.get("op") == "type" and step.get("text") and step.get("ref"):
-            return step["ref"]
+        if step.get("op") == "type":
+            if step.get("kind") == "suggest" and step.get("text") and step.get("ref"):
+                return step["ref"]
+            return None
         if step.get("op") == "click":
             return None
     return None
 
 
 def pending_suggestion(observation: Observation, history: list[dict]):
-    """The autocomplete row for the text just typed, when one is on the page.
+    """The list row for the text just typed into a `suggest` field.
 
-    A clock in the name is a calendar chip or a duration, not a suggestion, so
-    typing a title must not turn the next click into opening that event.
+    Only `option` rows count: a button or a link whose label happens to start
+    with the same words is something else on the page. A row the observer
+    attributes to that field (`↳ eN`) wins over one it does not.
     """
     ref = pending_type_ref(history)
     if not ref:
@@ -316,42 +322,42 @@ def pending_suggestion(observation: Observation, history: list[dict]):
          if step.get("ok") and step.get("op") == "type" and step.get("ref") == ref),
         "",
     ).strip()
-    if not typed or len(typed) > 20:
+    if not typed:
         return None
-    hits = []
-    for element in observation.elements:
-        if element.ref == ref or element.disabled:
-            continue
-        if element.role not in {"option", "menuitem", "button", "link"}:
-            continue
-        name = (element.name or "").strip()
-        if not name.startswith(typed) or name == typed or len(name) > 40:
-            continue
-        if any(ch.isdigit() for ch in name) and ":" in name:
-            continue
-        hits.append(element)
+    mark = f"\u21b3 {ref}"
+    hits = [
+        element for element in observation.elements
+        if element.role == "option" and not element.disabled and element.ref != ref
+        and (element.name or "").strip().startswith(typed)
+    ]
     if not hits:
         return None
-    hits.sort(key=lambda element: (0 if element.role == "option" else 1, len(element.name or "")))
+    hits.sort(key=lambda element: (mark not in (element.context or ""), len(element.name or "")))
     return hits[0]
 
 
-def _repeat_create(element, history: list[dict]) -> bool:
-    """A second new-form button after a form was already submitted.
+def retire_create(observation: Observation, memory: list[dict]) -> None:
+    """After a form was opened and submitted, its create button is not offered again.
 
-    The model finishes a form, the page returns to the list, and it clicks the
-    same create button again. Each of those is another saved copy.
+    The page returns to the list, the model sees the same button, and every
+    click of it is another saved copy. Read from the whole goal, not the
+    window shown to the model, so a long run does not forget it saved.
     """
-    if "icon-add" not in (element.name or ""):
-        return False
-    added = saved = False
-    for step in history:
-        target = step.get("target") or ""
-        if step.get("op") == "click" and "icon-add" in target:
-            added = True
-        if target == "保存" or target.endswith("保存"):
-            saved = True
-    return added and saved
+    created = False
+    for step in memory:
+        if not step.get("ok"):
+            continue
+        if step.get("kind") == "create":
+            created = True
+        elif created and step.get("kind") == "submit":
+            for element in observation.elements:
+                if element.kind == "create":
+                    element.disabled = True
+            return
+
+
+def _unnamed_control(element) -> bool:
+    return element.role in {"button", "link"} and not element.editable and not (element.name or "").strip()
 
 
 def _scroll_hidden_row(element) -> bool:
@@ -386,7 +392,7 @@ def filled_fields(observation: Observation) -> dict[str, str]:
 def remember_step(*, op: str, ref: str | None, target: str | None, ok: bool,
                   text: str | None = None, page_changed: bool | None = None,
                   value_before: str | None = None, value_after: str | None = None,
-                  secret: bool = False) -> dict:
+                  secret: bool = False, kind: str = "") -> dict:
     """One step, in the shape the next decision is shown.
 
     The executor's own history records that a click was dispatched. It does not
@@ -394,6 +400,8 @@ def remember_step(*, op: str, ref: str | None, target: str | None, ok: bool,
     afterwards, which is why a goal retyped a title it had already entered.
     A secret field contributes none of those. Text longer than a label is
     dropped rather than truncated into something the next step might type back.
+    Clicking a `picker` opens its menu and leaves the value where it was on
+    purpose, so that click is not counted as standing still.
     """
     entry: dict = {
         "op": op,
@@ -402,18 +410,20 @@ def remember_step(*, op: str, ref: str | None, target: str | None, ok: bool,
         "ok": ok,
         "page_changed": page_changed if isinstance(page_changed, bool) else None,
     }
+    if kind:
+        entry["kind"] = kind
     if text and not secret and len(text) <= 40:
         entry["text"] = text
     if value_after is not None and not secret:
         shown = value_after[:40]
         entry["value_after"] = shown
-        if value_before is not None and value_before[:40] == shown:
+        opens_menu = op == "click" and kind == "picker"
+        if value_before is not None and value_before[:40] == shown and not opens_menu:
             entry["value_unchanged"] = True
     return entry
 
 
-def _operation_heads(observation: Observation,
-                    history: list[dict] | None = None) -> tuple[set[str], dict[str, list]]:
+def _operation_heads(observation: Observation) -> tuple[set[str], dict[str, list]]:
     """Group observed elements by the operations they can actually perform.
 
     Only operations present in `OPERATION_TO_ACT` are offered. An element may
@@ -422,11 +432,8 @@ def _operation_heads(observation: Observation,
     step nobody can execute. Uploading stays reachable through `browser_act`,
     where the caller supplies the path.
     """
-    history = history or []
     heads: dict[str, list] = {}
     for element in observation.elements:
-        if _repeat_create(element, history):
-            continue
         # `occluded` and `disabled` are both "present but not usable now", and
         # both are refused by the guard that runs on act. Offering one as a
         # target buys a step that cannot execute. They stay in `state` so the
@@ -441,6 +448,13 @@ def _operation_heads(observation: Observation,
         for kind in element.target_kinds():
             if kind in OPERATION_TO_ACT:
                 heads.setdefault(kind, []).append(element)
+    # A button or link with no name is a guess about what it does. On a
+    # calendar card those are transfer and delete. Offer one only when nothing
+    # named is clickable.
+    clicks = heads.get("CLICK") or []
+    named = [element for element in clicks if not _unnamed_control(element)]
+    if named and len(named) < len(clicks):
+        heads["CLICK"] = named
     if heads:
         heads.setdefault("SCROLL", [])
         heads.setdefault("WAIT", [])
@@ -543,7 +557,7 @@ def choose(cfg: Config, observation: Observation, goal: str, history: list[dict]
             "TYPESAFE_BASE_URL=https://openrouter.ai/api/alpha/decisions)."
         )
 
-    operations, heads = _operation_heads(observation, history)
+    operations, heads = _operation_heads(observation)
     if not operations:
         return {"operation": "BLOCKED", "ref": None, "confidence": 1.0, "usage": {}}
 
@@ -593,6 +607,7 @@ def choose(cfg: Config, observation: Observation, goal: str, history: list[dict]
         "page": {"url": observation.url, "title": observation.title, "text": observation.text},
         "elements": [
             {"ref": element.ref, "role": element.role, "name": element.name, "value": element.value,
+             **({"kind": element.kind} if element.kind else {}),
              **({"opens_on": "hover"} if element.hoverable else {}),
              **({"options": [option.get("label") for option in element.options[:20]]}
                 if element.options else {}),

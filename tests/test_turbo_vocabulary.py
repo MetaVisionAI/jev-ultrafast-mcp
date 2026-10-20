@@ -368,56 +368,111 @@ def test_a_retried_target_is_dropped_when_another_one_can_take_its_place():
     assert [element.ref for element in heads["CLICK"]] == ["e2"]
 
 
-def test_a_click_on_an_empty_text_field_is_really_typing():
-    """A date and a clock open a menu. A title or a people field wants text."""
-    people = Element(ref="e1", role="textbox", name="添加联系人或群", editable=True, value="")
-    title = Element(ref="e2", role="textbox", name="添加主题", editable=True, value="")
-    titled = Element(ref="e3", role="textbox", name="添加主题", editable=True, value="研发会议")
-    clock = Element(ref="e4", role="textbox", name="开始 时间", editable=True, value="")
-    day = Element(ref="e5", role="textbox", name="开始 日期", editable=True, value="")
-    search = Element(ref="e6", role="searchbox", name="Search", editable=True, value="")
+def test_only_an_empty_suggest_field_turns_a_click_into_typing():
+    """The rule reads `kind`, not a label, so it neither misses nor overreaches."""
+    people = Element(ref="e1", role="textbox", name="Add people", editable=True, kind="suggest")
+    filled = Element(ref="e2", role="textbox", name="Add people", editable=True, kind="suggest",
+                     value="杨飞")
+    clock = Element(ref="e3", role="textbox", name="添加联系人", editable=True, kind="picker")
+    title = Element(ref="e4", role="textbox", name="添加主题", editable=True)
+    search = Element(ref="e5", role="searchbox", name="Search", editable=True)
 
     assert policy.click_should_type(people) is True
-    assert policy.click_should_type(title) is True
-    assert policy.click_should_type(titled) is False
+    assert policy.click_should_type(filled) is False
     assert policy.click_should_type(clock) is False
-    assert policy.click_should_type(day) is False
+    assert policy.click_should_type(title) is False
     assert policy.click_should_type(search) is False
     assert policy.click_should_type(None) is False
 
 
-def test_a_typed_name_points_at_the_suggestion_not_the_calendar_chip():
-    """The row that starts with the text just typed is the one to click.
+def _typed(ref: str, text: str, kind: str = "suggest") -> dict:
+    return {"op": "type", "ref": ref, "target": "", "ok": True, "text": text,
+            "page_changed": True, **({"kind": kind} if kind else {})}
 
-    A chip that repeats the title next to a clock is the saved event, and
-    clicking it is not selecting an autocomplete suggestion.
-    """
-    people = Element(ref="e1", role="textbox", name="添加联系人或群", editable=True, value="杨飞")
-    person = Element(ref="e2", role="button", name="杨飞 技术部")
-    chip = Element(ref="e3", role="button", name="研发会议 , 14:00 - 14:30")
-    observation = _observation([people, person, chip])
-    history = [{"op": "type", "ref": "e1", "target": "添加联系人或群", "ok": True,
-                "text": "杨飞", "page_changed": True}]
+
+def test_a_typed_name_points_at_its_option_row_and_nothing_else():
+    """A button that starts with the same words is not the suggestion."""
+    people = Element(ref="e1", role="textbox", name="添加联系人或群", editable=True,
+                     kind="suggest", value="杨飞")
+    person = Element(ref="e2", role="option", name="杨飞 技术部")
+    lookalike = Element(ref="e3", role="button", name="杨飞的日程")
+    observation = _observation([people, lookalike, person])
+    history = [_typed("e1", "杨飞")]
 
     assert policy.pending_suggestion(observation, history).ref == "e2"
 
-    history.append({"op": "click", "ref": "e2", "target": "杨飞 技术部", "ok": True,
-                    "page_changed": True})
+    history.append({"op": "click", "ref": "e2", "target": "杨飞 技术部", "ok": True})
     assert policy.pending_suggestion(observation, history) is None
 
 
-def test_a_second_create_button_is_not_offered_after_the_form_was_saved():
-    """Each click of icon-add after 保存 was another copy of the same event."""
-    add = Element(ref="e9", role="button", name="icon-add")
-    other = Element(ref="e10", role="button", name="今天")
-    saved = [
-        {"op": "click", "ref": "e1", "target": "icon-add", "ok": True},
-        {"op": "click", "ref": "e2", "target": "保存", "ok": True},
+def test_typing_a_title_never_redirects_a_click():
+    """The title is not a `suggest` field, so a row that echoes it is left alone."""
+    title = Element(ref="e1", role="textbox", name="添加主题", editable=True, value="研发会议")
+    echo = Element(ref="e2", role="option", name="研发会议纪要")
+    observation = _observation([title, echo])
+
+    assert policy.pending_suggestion(observation, [_typed("e1", "研发会议", kind="")]) is None
+
+
+def test_the_row_the_field_opened_wins_over_another_list():
+    near = Element(ref="e2", role="option", name="杨飞 技术部 北京", context="\u21b3 e1")
+    far = Element(ref="e3", role="option", name="杨飞 技术部")
+    observation = _observation([far, near])
+
+    assert policy.pending_suggestion(observation, [_typed("e1", "杨飞")]).ref == "e2"
+
+
+def test_a_create_button_retires_once_its_form_was_submitted():
+    """Each click of create after a submit was another copy of the same event."""
+    add = Element(ref="e9", role="button", name="新建", kind="create")
+    memory = [
+        {"op": "click", "ref": "e1", "ok": True, "kind": "create"},
+        {"op": "click", "ref": "e2", "ok": True, "kind": "submit"},
     ]
+    observation = _observation([add])
 
-    _, heads = policy._operation_heads(_observation([add, other]), saved)
+    policy.retire_create(observation, memory[:1])
+    assert add.disabled is False
 
-    assert [element.ref for element in heads["CLICK"]] == ["e10"]
+    policy.retire_create(observation, memory)
+    assert add.disabled is True
+
+
+def test_a_failed_submit_does_not_retire_create():
+    add = Element(ref="e9", role="button", name="新建", kind="create")
+    memory = [
+        {"op": "click", "ref": "e1", "ok": True, "kind": "create"},
+        {"op": "click", "ref": "e2", "ok": False, "kind": "submit"},
+    ]
+    policy.retire_create(_observation([add]), memory)
+    assert add.disabled is False
+
+
+def test_opening_a_picker_twice_is_not_standing_still():
+    """Clicking a clock field opens its menu; the value moves on the option click."""
+    clicked = policy.remember_step(op="click", ref="e3", target="开始 时间", ok=True,
+                                   page_changed=True, value_before="11:00",
+                                   value_after="11:00", kind="picker")
+    retyped = policy.remember_step(op="type", ref="e1", target="添加主题", ok=True,
+                                   text="研发会议", page_changed=True,
+                                   value_before="研发会议", value_after="研发会议")
+
+    assert "value_unchanged" not in clicked
+    assert clicked["kind"] == "picker"
+    assert retyped["value_unchanged"] is True
+    assert policy.stalled_targets([clicked, clicked]) == {}
+
+
+def test_an_unnamed_button_is_offered_only_when_nothing_named_is():
+    """On a calendar card the unnamed icons were transfer and delete."""
+    unnamed = Element(ref="e1", role="button", name="", label="button")
+    named = Element(ref="e2", role="button", name="编辑")
+
+    _, heads = policy._operation_heads(_observation([unnamed, named]))
+    assert [element.ref for element in heads["CLICK"]] == ["e2"]
+
+    _, alone = policy._operation_heads(_observation([unnamed]))
+    assert [element.ref for element in alone["CLICK"]] == ["e1"]
 
 
 def test_a_menu_row_scrolled_out_of_its_list_is_still_offered():

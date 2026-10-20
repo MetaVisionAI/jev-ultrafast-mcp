@@ -87,8 +87,13 @@ helper must return it rather than declining the field. The decision sees the las
 20 steps, including the text that was typed and whether the page changed, and
 `filled`, the current value of each editable field. A step the page did not
 answer is withdrawn after two tries, even when the model alternates targets.
-After a name is typed, the loop waits for the suggestion list and clicks the
-row whose name starts with that text before it will save.
+Each control carries a `kind` read from the page, not its label: `suggest`,
+`picker`, `submit`, `create`. After text is typed into a `suggest` field (the
+people box), the loop waits for its `option` rows, and a click on that field or
+on `submit` while a matching row is open selects the row. After a form was
+created and submitted, its create button is no longer offered, so a finished
+goal does not book a second copy. An unnamed button is offered only when
+nothing named is clickable.
 
 ## Reading a page is not a task
 

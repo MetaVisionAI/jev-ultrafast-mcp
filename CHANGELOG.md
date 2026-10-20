@@ -273,26 +273,43 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
-- **A goal remembers what it typed, and a menu row scrolled out of its list stays choosable.**
-  Each decision is a fresh request. The only memory was the last ten steps as a verb, a ref and a
-  name, so a title typed ten times looked like ten unnamed clicks, and a loop that alternated
-  between the time field and the people field never reached three hits on one ref. The goal now
-  sends the last twenty steps with the text, whether the page changed, and the value afterwards,
-  plus `filled`, the current value of every editable field that holds one. Two steps the page did
-  not answer, or two clicks that left an editable value standing still, withdraw that target even
-  when another ref sits between them. A row scrolled out of its list was marked covered because the
-  hit test found the page behind the list, so `14:00` was never offered while `14:00 (2.5小时)` was.
-  Clipping by a scroll container is no longer a cover; a dialog still is. A portal row that the hit
-  test still calls covered is offered anyway, and the click scrolls it into view first.
-  `HELPER_VERSION` goes to 10. A click on an empty text field that is not a date or a
-  clock is carried out as typing: the model was clicking the people box to focus it, the page
-  did not change, and the name was never entered. A click on the field just typed into
-  selects the suggestion whose name starts with that text, and `icon-add` is not offered
-  again after that form has already been saved, which is how one booking became several copies.
-  After typing, the loop waits until the page changes before the next decision, because a
-  people search renders its rows after the keystrokes. 保存 while that row is still open
-  selects the row instead of storing the event with nobody invited. One malformed decision is asked
-  again instead of abandoning the form.
+- **A goal remembers what it typed and whether the page answered.** Each decision is a fresh
+  request. The only memory was the last ten steps as a verb, a ref and a name, so a title typed ten
+  times looked like ten unnamed clicks. The goal now sends the last twenty steps with the text, whether
+  the page changed, the field's value afterwards and the control's `kind`, plus `filled`, the current
+  value of every editable field that holds one. Two steps the page did not answer, or two steps that
+  left an editable value standing still, withdraw that target even when another ref sits between
+  them. Opening a `picker` leaves its value where it was on purpose and is not counted.
+
+- **A menu row scrolled out of its list stays choosable.** The hit test found the page behind the
+  list, so the row was marked covered and `14:00` was never offered while `14:00 (2.5小时)` was.
+  Clipping by a scroll container is no longer a cover; a dialog still is. A portal row the hit test
+  still calls covered is offered, and the click scrolls it into view first.
+
+- **Elements carry `kind`: what the control is for.** `suggest` (typing opens a list to pick from),
+  `picker` (a click opens a menu that sets the value), `submit`, `create`. The Feishu strategy reads
+  it from the component vocabulary: a `_selection` with `with-input-search` is `suggest`, any other
+  `_selection` is a `picker`, `larkc-btn-primary` submits, `icon-add` creates. Elsewhere it comes
+  from HTML: `aria-autocomplete`, `list`, date and time inputs, a form's submit button. The goal
+  loop keys on `kind` and never on a label. `HELPER_VERSION` goes to 11.
+
+- **Text typed into a `suggest` field is followed by its row.** After the type, the loop waits up to
+  two seconds for a new `option` to appear, because search results arrive after the keystrokes and
+  the snapshot taken with them shows only the field. A click on that field, or on the `submit`
+  control, while an `option` starting with the typed text is open selects the row instead; a row
+  the observer attributes to the field (`↳ eN`) wins. A click on an empty `suggest` field is
+  carried out as typing. Only `option` rows count, so a button that echoes the text is left alone.
+
+- **A create button is retired once its form was submitted.** One booking became five events
+  because the model returned to the list and clicked `icon-add` again. After a successful
+  `create` then `submit` in the same goal, every `create` control is marked unusable.
+
+- **An unnamed button is offered only when nothing named is clickable.** On a calendar card the
+  unnamed icons were transfer and delete.
+
+- **One malformed decision is asked again.** A contract violation from the route raises
+  `MalformedAnswer` and gets one retry, counted in the decision total. An outage or a refused key
+  still stops the goal.
 
 - **`browser_goal` follows a tab the page it is driving just opened.** A click with `target=_blank`
   (Feishu's calendar entry is one: it leaves through `security.feishu.cn/link/safety` and the week

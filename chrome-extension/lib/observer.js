@@ -26,7 +26,7 @@
   // satisfied, the server re-injected this whole file on every observation, and
   // a page holding the older helper was never actually upgraded, because the
   // early return fired on the number it already carried.
-  const VERSION = 10;
+  const VERSION = 11;
   try { if (W !== W.top) return; } catch (_) { return; }
   if (W.__jevMcp && W.__jevMcp.version === VERSION) return;
 
@@ -268,6 +268,16 @@
       }
       return parts.join(' ');
     },
+    // What a control is for, read from the component vocabulary. The goal loop
+    // keys on this instead of a label, so one rule covers every Feishu form.
+    kindOf(e) {
+      const selection = e.tagName === 'INPUT' && e.closest ? e.closest('._selection') : null;
+      if (selection) return selection.classList.contains('with-input-search') ? 'suggest' : 'picker';
+      if (e.matches('._selection')) return 'picker';
+      if (e.matches('.larkc-btn-primary')) return 'submit';
+      if (iconToken(e) === 'icon-add') return 'create';
+      return '';
+    },
   }];
 
   const activeStrategy = opts => {
@@ -373,6 +383,21 @@
   // has to live here. Otherwise a ref collected as a button is `target_changed`
   // the moment something tries to click it.
   const roleOf = e => nativeRole(e) || (S.strategy && S.strategy.roleOf(e)) || null;
+
+  // `suggest`: typing opens a list to pick from. `picker`: a click opens a menu
+  // and the value comes from it. `submit`: sends the form. `create`: opens a
+  // new one. Empty when nothing on the page says which.
+  const PICKER_TYPES = ['date', 'time', 'datetime-local', 'month', 'week'];
+  const nativeKind = e => {
+    const tag = e.tagName;
+    const t = typeOf(e);
+    const auto = (e.getAttribute('aria-autocomplete') || '').toLowerCase();
+    if (auto === 'list' || auto === 'both' || (tag === 'INPUT' && e.hasAttribute('list'))) return 'suggest';
+    if (tag === 'SELECT' || (tag === 'INPUT' && PICKER_TYPES.includes(t))) return 'picker';
+    if ((tag === 'BUTTON' || tag === 'INPUT') && e.form && e.type === 'submit') return 'submit';
+    return '';
+  };
+  const kindOf = e => (S.strategy && S.strategy.kindOf && S.strategy.kindOf(e)) || nativeKind(e);
 
   const FLAT = ['button', 'submit', 'reset', 'image'];
 
@@ -688,7 +713,7 @@
         || (expanded !== null && !editable
             && !['checkbox', 'radio', 'switch'].includes(it.role));
       built.push({
-        node, ref: 'e' + node, role: it.role, name, label: name || it.role,
+        node, ref: 'e' + node, role: it.role, kind: kindOf(e), name, label: name || it.role,
         value: secretField ? '' : shownValue.slice(0, 300),
         editable, occluded, inViewport, hoverable, disabled: isDisabled,
         // Role outranks position. The reverse order -- viewport 100 against a
