@@ -555,18 +555,20 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
     speculative fan-out). `verify` runs browser_assert-style checks on the final
     page, so the result is a fact rather than a model's claim of success.
 
-    The decision model is reachable through two APIs and both are supported here.
+    The decision model is reachable through three APIs and all are supported here.
     `JEV_PROVIDER=typesafe` uses Jev's own API with TYPESAFE_API_KEY;
     `JEV_PROVIDER=openrouter` routes the same model through OpenRouter with
-    OPENROUTER_API_KEY and no TypeSafe account. Same model, same contract either
-    way. Reading a page needs no key at all, so when no key is set the handoff is
-    unavailable while browser_open, browser_observe and browser_act keep working.
+    OPENROUTER_API_KEY and no TypeSafe account; `JEV_PROVIDER=perplexity` asks
+    Perplexity's pplx-decider instead, with PERPLEXITY_API_KEY. The questions are
+    the same on every route. Reading a page needs no key at all, so when no key is
+    set the handoff is unavailable while browser_open, browser_observe and
+    browser_act keep working.
     """
     if not policy.available(CONFIG):
         return ("turbo_unavailable: no decision-model key is set, so the task cannot be "
                 "handed over.\n"
-                "Set TYPESAFE_API_KEY for Jev's own API, or OPENROUTER_API_KEY with "
-                "JEV_PROVIDER=openrouter.\n"
+                "Set TYPESAFE_API_KEY for Jev's own API, OPENROUTER_API_KEY with "
+                "JEV_PROVIDER=openrouter, or PERPLEXITY_API_KEY with JEV_PROVIDER=perplexity.\n"
                 "Until then, drive the loop yourself: browser_observe → pick a ref → browser_act.")
     try:
         tab = _session(session)
