@@ -250,6 +250,56 @@ def _answers(result: object, question_id: str) -> dict:
     return answer
 
 
+def _as_text(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "\n\n".join(_as_text(item) for item in value)
+    if isinstance(value, dict):
+        return "\n".join(f"{key}: {_as_text(item)}" for key, item in value.items())
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _option_text(value: object) -> str | None:
+    """One choice option as the single line a `decisions` route accepts.
+
+    The element label leads, unlabelled, because it is what the option *is*; the
+    rest follow as `key: value`, and empty fields are dropped rather than sent as
+    `current_value: None`.
+    """
+    if value is None or isinstance(value, str):
+        return value
+    if not isinstance(value, dict):
+        return _as_text(value)
+    parts = [str(value["element"])] if value.get("element") not in (None, "") else []
+    parts += [f"{key}: {_as_text(item)}" for key, item in value.items()
+              if key != "element" and item not in (None, "")]
+    return " | ".join(parts)
+
+
+def _wire_body(cfg: Config, body: dict) -> dict:
+    """The request in the dialect `cfg.provider` speaks.
+
+    The questions are built once, in TypeSafe's shape, where an instruction and a
+    choice description may be any JSON. Perplexity's Decisions API takes the same
+    envelope but answers a structured description with a 400, so on that route
+    both are flattened to strings. The option *keys* are never touched: they are
+    the refs `_validate` checks the answer against.
+    """
+    if cfg.wire != "decisions":
+        return body
+    questions = {}
+    for name, question in body["questions"].items():
+        question = dict(question)
+        if "instructions" in question:
+            question["instructions"] = _as_text(question["instructions"])
+        criteria = question.get("criteria")
+        if isinstance(criteria, dict):
+            question["criteria"] = {key: _option_text(item) for key, item in criteria.items()}
+        questions[name] = question
+    return {**body, "questions": questions}
+
+
 def _validate(answer: dict, ids: set[str]) -> dict:
     """Refuse anything but the documented answer, and refuse it as a refusal.
 
@@ -622,7 +672,7 @@ def choose(cfg: Config, observation: Observation, goal: str, history: list[dict]
     body = {"model": cfg.typesafe_model, "state": state, "questions": questions}
 
     started = time.perf_counter()
-    result = _post(cfg.typesafe_endpoint, cfg.typesafe_key, body)
+    result = _post(cfg.typesafe_endpoint, cfg.typesafe_key, _wire_body(cfg, body))
     operation_answer = _validate(
         _answers(result, "operation"), operations | {"DONE", "BLOCKED"}
     )
@@ -683,7 +733,8 @@ def _pick_option(cfg: Config, element, goal: str, observation: Observation) -> s
         },
     }
     try:
-        answer = _answers(_post(cfg.typesafe_endpoint, cfg.typesafe_key, body), "option")
+        answer = _answers(_post(cfg.typesafe_endpoint, cfg.typesafe_key, _wire_body(cfg, body)),
+                          "option")
         return answer.get("choice")
     except TurboUnavailable:
         # An unanswerable option question is not a failure: the caller falls back
