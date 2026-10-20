@@ -37,6 +37,7 @@ Cline, Windsurf, Gemini CLI). MIT licensed. Requires Python ≥ 3.10 and any Chr
 - `browser_open(url, session, hint)` — open a URL in a background tab it owns, return the element table
 - `browser_observe(session, mode, include_text, include_json)` — re-read the page; `mode=auto` emits a delta
 - `browser_act(ops, session, dry_run, stop_on_error, observe_after)` — many ops in one round trip
+- `browser_click_at(x, y, session, label, confirm)` — click a point read off a viewport screenshot when the element table has no ref
 - `browser_assert(checks, session)` — deterministic PASS/FAIL, no model judgement
 - `browser_macro(action, session, name, params, ...)` — record a flow, replay it at zero model cost
 - `browser_request_help(prompt, session, title, targets, completion, timeout_ms)` — hand one step

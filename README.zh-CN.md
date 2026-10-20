@@ -65,7 +65,7 @@ python3 -m venv ~/.jev-ultrafast-mcp/venv
 ```
 
 这会给你一个 `jev-ultrafast-mcp` 命令，以及一个可以填进客户端配置的稳定解释器路径 —— 已在
-Python 3.13 + 最新 `mcp` SDK 上实测：十一个工具全部正常列出。
+Python 3.13 + 最新 `mcp` SDK 上实测：十二个工具全部正常列出。
 
 `scripts/install.py` 是另一半：它会找到你机器上的 MCP 客户端，按各自期望的格式写入配置，
 **合并**进现有文件，并且先存一份 `.bak`。
@@ -480,13 +480,14 @@ e12  btn    Delete account
 
 ## 工具
 
-一共十一个，多数会话只会用到其中四个。
+一共十二个，多数会话只会用到其中四个。
 
 | 工具 | 说明 |
 |---|---|
 | `browser_open` | 在自有标签页里打开 URL，并返回元素表 |
 | `browser_observe` | 重读页面：出增量，或按需给全量 |
 | `browser_act` | 在一次往返里按顺序执行一组 ops，然后返回增量 |
+| `browser_click_at` | 元素表没有 ref 时，按视口截图上读到的比例坐标点击 |
 | `browser_assert` | 对页面做确定性断言，不靠模型判断 |
 | `browser_macro` | 录一次流程，之后回放，零模型调用 |
 | `browser_goal` | 把整个任务交出去：由决策模型驱动页面 |
@@ -621,7 +622,7 @@ decisions 路由）。给了 `verify` 检查时返回 `verified: PASS/FAIL`。
 | 否 | `JEVMCP_HEADLESS` | `1` | `0` 显示窗口 |
 | 否 | `JEVMCP_FOREGROUND` | `0` | `1` 激活自有标签页 |
 | 否 | `JEVMCP_SANDBOX` | `auto` | 浏览器启动即崩时，`auto` 会用 `--no-sandbox` 重试 |
-| 否 | `JEVMCP_WINDOW` | `1280x860` | 浏览器窗口尺寸 |
+| 否 | `JEVMCP_WINDOW` | 有界面或 `mode=attach` 时为 `auto`，否则 `1280x860` | `宽x高` 锁定布局视口；`auto` 让页面铺满窗口 |
 | 否 | `JEVMCP_PROFILE_DIR` | `~/.jev-ultrafast-mcp/chrome-profile` | 持久化 profile —— 手动登录一次，之后一直保持 |
 | 否 | `JEVMCP_ALLOW_DOMAINS` | *（不限）* | 逗号分隔；导航到其他域名会被拒绝 |
 | 否 | `JEVMCP_DENY_DOMAINS` | *（无）* | 逗号分隔黑名单 |

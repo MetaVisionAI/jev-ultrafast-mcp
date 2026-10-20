@@ -23,7 +23,7 @@ from pathlib import Path
 from websockets.protocol import State
 from websockets.sync.client import connect
 
-from .config import Config, find_chrome
+from .config import DEFAULT_WINDOW, Config, find_chrome
 
 
 class CdpError(RuntimeError):
@@ -204,13 +204,20 @@ def launch_chrome(cfg: Config, *, headless: bool | None = None,
     binary = find_chrome(cfg.chrome)
     headless = cfg.headless if headless is None else headless
     profile = cfg.resolved_profile()
-    width, height = cfg.window
+    # A locked viewport names the window. `None` means the page fills whatever
+    # window the user gets: maximized where the flag is honoured, and otherwise
+    # Chrome's own size. Headless still needs a pixel size, because it has no screen.
+    if cfg.window is None and not headless:
+        size_args = ["--start-maximized"]
+    else:
+        width, height = cfg.window or DEFAULT_WINDOW
+        size_args = [f"--window-size={width},{height}"]
 
     base = [
         binary,
         "--remote-debugging-port=0",
         f"--user-data-dir={profile}",
-        f"--window-size={width},{height}",
+        *size_args,
         "--no-first-run", "--no-default-browser-check", "--disable-background-networking",
         "--disable-component-update", "--disable-sync",
     ]

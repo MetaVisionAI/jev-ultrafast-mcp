@@ -262,6 +262,8 @@ class Observation:
         header = (f"[{marker}#{self.sequence}] {self.url}  \"{self.title}\"  "
                   f"scroll={self.scroll.get('y', 0)}/{self.scroll.get('height', 0)}  "
                   f"reachable={self.reachable}/{len(self.elements)}")
+        if self.strategy:
+            header += f"  strategy={self.strategy}"
         if self.omitted:
             header += f"  (omitted {self.omitted} low-priority)"
         if self.offscreen:

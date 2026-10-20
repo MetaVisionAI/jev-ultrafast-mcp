@@ -265,6 +265,7 @@ export function observationLines(observation, {
   let header = `[${marker}#${observation.sequence}] ${observation.url}  "${observation.title}"  `
     + `scroll=${scrollValue(observation.scroll, 'y')}/${scrollValue(observation.scroll, 'height')}  `
     + `reachable=${observation.reachable}/${observation.elements.length}`;
+  if (observation.strategy) header += `  strategy=${observation.strategy}`;
   if (observation.omitted) header += `  (omitted ${observation.omitted} low-priority)`;
   if (observation.offscreen) {
     header += `  (offscreen ${observation.offscreen}, ${FLAG_OFFSCREEN} = will scroll on act)`;

@@ -23,6 +23,7 @@ WRITES = {
     "browser_tabs",
     "browser_close",
     "browser_request_help",
+    "browser_click_at",
 }
 
 
@@ -73,5 +74,6 @@ def test_open_world_marks_what_leaves_the_page_you_are_on():
                  "browser_tabs"):
         assert tools[name].annotations.open_world_hint is True, name
     for name in ("browser_observe", "browser_assert", "browser_sessions",
-                 "browser_doctor", "browser_close", "browser_request_help"):
+                 "browser_doctor", "browser_close", "browser_request_help",
+                 "browser_click_at"):
         assert tools[name].annotations.open_world_hint is False, name

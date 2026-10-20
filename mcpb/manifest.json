@@ -55,6 +55,10 @@
       "description": "Run a list of ops in one round trip, then return a delta."
     },
     {
+      "name": "browser_click_at",
+      "description": "Click a point read off a viewport screenshot when the element table has no ref."
+    },
+    {
       "name": "browser_assert",
       "description": "Deterministic checks on the page, with no model judgement about whether it worked."
     },

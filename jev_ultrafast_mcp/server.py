@@ -1,16 +1,17 @@
 """MCP surface.
 
-Eleven tools. The important design choice is what is *not* here: there is no
-`javascript`, no `click_at(x, y)`, and no `query_selector`. An agent can only
-name a ref that the server observed, and the server only dispatches input after
-re-checking that the ref still means what it meant. That property is what makes
-it safe to hand a browser to an autonomous agent over MCP.
+Twelve tools. The important design choice is what is *not* here: there is no
+`javascript` and no `query_selector`. An agent names a ref the server observed,
+and the server only dispatches that input after re-checking that the ref still
+means what it meant. The one exception is `browser_click_at`: a control the
+element table cannot see, which the caller points at after reading a screenshot.
 """
 
 from __future__ import annotations
 
 import atexit
 import json
+import math
 import time
 
 from mcp.server import MCPServer
@@ -24,7 +25,7 @@ from .browser import BrowserManager, PageStale
 from .cdp import CdpError, ChromeLaunchError
 from .config import Config, provider_note
 from .observe import Observation
-from .safety import SafetyError
+from .safety import SafetyError, confirm_reason
 
 INSTRUCTIONS = """\
 Fast browser control for agents.
@@ -361,6 +362,60 @@ def browser_act(ops: list[dict], session: str = "default", dry_run: bool = False
                           observe_after=observe_after)
         return _render_act(payload)
     except (ChromeLaunchError, CdpError, PageStale, SafetyError, ValueError) as exc:
+        return _error(exc)
+
+
+def _viewport_fraction(value: float, name: str) -> float:
+    """A point on the picture, as a fraction of its width or height.
+
+    `0` is the top or left edge and `1` is the opposite edge. Anything outside
+    that, or a value that is not a number, is a refusal: a coordinate the caller
+    did not actually read off the screenshot must not become a click.
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = math.nan
+    if not math.isfinite(number) or number < 0 or number > 1:
+        raise ValueError(
+            f"{name} must be a fraction of the viewport between 0 and 1, not {value!r}"
+        )
+    return number
+
+
+@SERVER.tool(annotations=WRITES_LOCAL)
+def browser_click_at(x: float, y: float, session: str = "default",
+                     label: str = "", confirm: bool = False) -> str:
+    """Click a point the caller read off a viewport screenshot.
+
+    `x` and `y` are fractions of that picture: 0,0 is the top-left and 1,1 is
+    the bottom-right. Use this only when the element table has no ref for a
+    control that is visibly there. The server does not look at the image.
+
+    `label` is text you can read on the control. A label that matches a
+    confirmation rule (pay, delete, …) returns needs_confirmation; re-send with
+    confirm=true to proceed. After the click, ordinary inputs and buttons come
+    back as refs — use those, and do not keep clicking by coordinates.
+    """
+    try:
+        px = _viewport_fraction(x, "x")
+        py = _viewport_fraction(y, "y")
+    except ValueError as exc:
+        return f"invalid_request: {exc}"
+    if label:
+        reason = confirm_reason(CONFIG, label, "button")
+        if reason and not confirm:
+            return (f"needs_confirmation: {reason}; re-send with confirm=true "
+                    "to proceed. Nothing was clicked.")
+    try:
+        tab = _session(session)
+        width, height = tab._viewport_size()
+        tab.click_at(width * px, height * py)
+        observation = tab.observe()
+        return (f"clicked at {width * px:.0f},{height * py:.0f} "
+                f"({px:.3f}, {py:.3f} of {width}x{height})\n\n"
+                + _view(observation))
+    except (ChromeLaunchError, CdpError, PageStale, SafetyError) as exc:
         return _error(exc)
 
 
@@ -894,7 +949,7 @@ def browser_doctor() -> str:
     report = MANAGER.doctor()
     report["config"] = {
         "max_actions": CONFIG.max_actions,
-        "window": list(CONFIG.window),
+        "window": list(CONFIG.window) if CONFIG.window else "auto",
         "profile": str(CONFIG.resolved_profile()),
         "macros_dir": str(CONFIG.macros_dir()),
         # Which API is configured, not merely whether a key exists. The two providers are

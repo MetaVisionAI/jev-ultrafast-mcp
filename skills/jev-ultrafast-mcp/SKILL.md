@@ -104,11 +104,21 @@ spends money to answer a question the element table already answers.
 
 ## When to fall back to the manual loop
 
-Exactly two cases:
+Exactly three cases:
 
 1. `browser_goal` answers `turbo_unavailable:` — no model key is configured. Then
    `browser_open` → read the element table → `browser_act` → `browser_assert`.
 2. You only want to look (see above).
+3. `browser_goal` answers `blocked`, or the element table has no ref for a control
+   that is still visible on the page — an icon, a canvas, or a clickable region
+   with no `button` and no role. Do not hand the picture to another model. Take a
+   viewport screenshot with `browser_act` (`{"op": "screenshot"}`), read that
+   image, and call `browser_click_at(x, y)`. `x` and `y` are fractions of the
+   picture: `0,0` is the top-left and `1,1` is the bottom-right. Put any text you
+   can read on the control in `label`. After the click, observe again. Once
+   ordinary inputs or buttons appear, go back to the element table; do not keep
+   clicking by coordinates. Login, a CAPTCHA, and payment confirmation still go
+   to `browser_request_help`. Coordinates are not a way around them.
 
 ## Where to read next
 

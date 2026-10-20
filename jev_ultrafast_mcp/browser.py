@@ -29,7 +29,7 @@ from .cdp import (
     reattach_chrome,
     stop_chrome,
 )
-from .config import Config
+from .config import DEFAULT_WINDOW, Config
 from .observe import Element, Observation
 from .safety import SafetyError, check_url, confirm_reason, is_secret
 
@@ -222,14 +222,45 @@ class Session:
         self.cdp.call("Page.enable", session_id=self.page_session)
         self.cdp.call("Runtime.enable", session_id=self.page_session)
         self.cdp.call("Network.enable", session_id=self.page_session)
-        width, height = self.cfg.window
-        self.cdp.call("Emulation.setDeviceMetricsOverride", session_id=self.page_session,
-                      width=width, height=height, deviceScaleFactor=1, mobile=False)
+        self._apply_viewport()
         # Focus emulation keeps rAF/menus alive in a background tab without
         # stealing the user's foreground window.
         self.cdp.call("Emulation.setFocusEmulationEnabled", session_id=self.page_session, enabled=True)
         self.cdp.call("Page.addScriptToEvaluateOnNewDocument", session_id=self.page_session,
                       source=HELPER_SRC)
+
+    def _apply_viewport(self) -> None:
+        """Lock the layout viewport, or let the page fill the window.
+
+        The override is what makes a page look like it sits in a frame: Chrome
+        keeps drawing 1280x860 after the window grows. `None` clears any override
+        a previous attach left on this target, because Chrome remembers it on the
+        target, not on the session.
+        """
+        if self.cfg.window is None:
+            self.cdp.call("Emulation.clearDeviceMetricsOverride", session_id=self.page_session)
+            return
+        width, height = self.cfg.window
+        self.cdp.call("Emulation.setDeviceMetricsOverride", session_id=self.page_session,
+                      width=width, height=height, deviceScaleFactor=1, mobile=False)
+
+    def _viewport_size(self) -> tuple[int, int]:
+        """CSS pixels of the layout viewport, for events that need a point on it.
+
+        A locked window is that size. An unlocked one is whatever the page
+        reports, so a wheel event lands in the page rather than in the margin
+        around a stale 1280x860 box.
+        """
+        if self.cfg.window is not None:
+            return self.cfg.window
+        size = self._safe_eval("[window.innerWidth, window.innerHeight]")
+        if (
+            isinstance(size, (list, tuple))
+            and len(size) == 2
+            and all(isinstance(part, (int, float)) and part > 0 for part in size)
+        ):
+            return int(size[0]), int(size[1])
+        return DEFAULT_WINDOW
 
     def _attach_page(self) -> None:
         """Create the session's own tab and attach to it.
@@ -1087,7 +1118,7 @@ class Session:
                     self._safe_eval("window.__jevMcp.scrollTo(%s)" % json.dumps(ref))
                     self._after_input("fast")
                 else:
-                    width, height = self.cfg.window
+                    width, height = self._viewport_size()
                     self._call("Input.dispatchMouseEvent", type="mouseWheel",
                                x=width // 2, y=height // 2,
                                deltaX=delta if direction in {"left", "right"} else 0,
@@ -1212,7 +1243,10 @@ class Session:
         geometry = self._ensure_reachable(ref)
         if not geometry.get("ok"):
             raise PageStale(geometry.get("reason", "unreachable"))
-        x, y = geometry["x"], geometry["y"]
+        self.click_at(geometry["x"], geometry["y"])
+
+    def click_at(self, x: float, y: float) -> None:
+        """Press and release at CSS pixels. The caller already chose the point."""
         self._call("Input.dispatchMouseEvent", type="mouseMoved", x=x, y=y)
         for event in ("mousePressed", "mouseReleased"):
             self._call("Input.dispatchMouseEvent", type=event, x=x, y=y,

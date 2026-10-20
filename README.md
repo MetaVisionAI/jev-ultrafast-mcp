@@ -71,7 +71,7 @@ python3 -m venv ~/.jev-ultrafast-mcp/venv
 ```
 
 That gives you a `jev-ultrafast-mcp` console script and a stable interpreter path to put in a
-client config — verified against the latest `mcp` SDK on Python 3.13, every one of the eleven tools
+client config — verified against the latest `mcp` SDK on Python 3.13, every one of the twelve tools
 listed.
 
 `scripts/install.py` is the other half: it finds your MCP clients and writes the config each one
@@ -520,13 +520,14 @@ the model re-reads only the part of the page that moved.
 
 ## Tools
 
-Eleven tools. Most sessions need four of them.
+Twelve tools. Most sessions need four of them.
 
 | Tool | Description |
 |---|---|
 | `browser_open` | Open a URL in its own tab, and return the element table |
 | `browser_observe` | Re-read the page: a delta, or the full table on demand |
 | `browser_act` | Run a list of ops in one round trip, then return a delta |
+| `browser_click_at` | Click a point read off a viewport screenshot, only when the table has no ref |
 | `browser_assert` | Deterministic checks on the page, with no model judgement |
 | `browser_macro` | Record a flow once, then replay it with zero model calls |
 | `browser_goal` | Hand the whole task over: the decision model drives the page |
@@ -676,7 +677,7 @@ All optional; the defaults are the point.
 | No | `JEVMCP_HEADLESS` | `1` | `0` for a visible window |
 | No | `JEVMCP_FOREGROUND` | `0` | `1` activates the owned tab |
 | No | `JEVMCP_SANDBOX` | `auto` | `auto` retries with `--no-sandbox` if the browser aborts on startup |
-| No | `JEVMCP_WINDOW` | `1280x860` | browser window size |
+| No | `JEVMCP_WINDOW` | `auto` when the window is visible or `mode=attach`, otherwise `1280x860` | `WIDTHxHEIGHT` locks the layout viewport; `auto` lets the page fill the window |
 | No | `JEVMCP_PROFILE_DIR` | `~/.jev-ultrafast-mcp/chrome-profile` | persistent profile — log in once, stay logged in |
 | No | `JEVMCP_ALLOW_DOMAINS` | *(all)* | comma-separated; navigation elsewhere is refused |
 | No | `JEVMCP_DENY_DOMAINS` | *(none)* | comma-separated blocklist |
