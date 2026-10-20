@@ -19,7 +19,7 @@ import time
 
 import httpx
 
-from .config import Config
+from .config import PROVIDERS, Config
 from .observe import Observation
 
 # The endpoint comes from Config: TypeSafe direct by default, or OpenRouter's
@@ -175,7 +175,28 @@ def available(cfg: Config) -> bool:
     return bool(cfg.typesafe_key)
 
 
-def _http_reason(status: int) -> str:
+# The longest a `Retry-After` is honoured for. A provider asking for a minute is
+# better reported than waited out inside one tool call.
+MAX_RETRY_AFTER = 10.0
+
+
+def _error_message(response) -> str:
+    """The provider's own `error.message`, when it sent one.
+
+    A 400 is a request this server built wrong, and on Perplexity's route the
+    message names the field -- which is the only part of the response that says
+    what to fix.
+    """
+    try:
+        payload = response.json()
+    except ValueError:
+        return ""
+    error = payload.get("error") if isinstance(payload, dict) else None
+    message = error.get("message") if isinstance(error, dict) else None
+    return " ".join(str(message).split())[:300] if message else ""
+
+
+def _http_reason(status: int, url: str = "", detail: str = "") -> str:
     """Turn a provider status into something the caller can act on.
 
     The decision model is reachable through more than one route, so name the
@@ -183,14 +204,24 @@ def _http_reason(status: int) -> str:
     """
     if status == 401:
         return ("Decision model rejected the key (HTTP 401). Check the key for the provider "
-                "in use: TYPESAFE_API_KEY for Jev's own API, or OPENROUTER_API_KEY when "
-                "JEV_PROVIDER=openrouter. browser_doctor reports which one is configured. "
-                "No action executed.")
-    if status == 402:
+                "in use: TYPESAFE_API_KEY for Jev's own API, OPENROUTER_API_KEY when "
+                "JEV_PROVIDER=openrouter, or PERPLEXITY_API_KEY when JEV_PROVIDER=perplexity. "
+                "browser_doctor reports which one is configured. No action executed.")
+    if status == 402 and "openrouter.ai" in url:
         return ("OpenRouter has no credits on this account (HTTP 402). Add credits at "
                 "https://openrouter.ai/settings/credits, or set JEV_PROVIDER=typesafe and use "
                 "TYPESAFE_API_KEY. No action executed.")
+    if detail:
+        return f"Decision model returned HTTP {status}: {detail} No action executed."
     return f"Decision model returned HTTP {status}; no action executed."
+
+
+def _retry_delay(response, attempt: int) -> float:
+    raw = (getattr(response, "headers", None) or {}).get("retry-after")
+    try:
+        return min(max(float(raw), 0.0), MAX_RETRY_AFTER)
+    except (TypeError, ValueError):
+        return 0.5 * 2 ** attempt
 
 
 def _post(url: str, key: str, body: dict) -> object:
@@ -200,10 +231,11 @@ def _post(url: str, key: str, body: dict) -> object:
         except httpx.HTTPError:
             raise TurboUnavailable("Decision model unreachable; no action executed.") from None
         if response.status_code in {429, 529, 503} and attempt < 2:
-            time.sleep(0.5 * 2 ** attempt)
+            time.sleep(_retry_delay(response, attempt))
             continue
         if response.is_error:
-            raise TurboUnavailable(_http_reason(response.status_code))
+            detail = _error_message(response) if response.status_code == 400 else ""
+            raise TurboUnavailable(_http_reason(response.status_code, url, detail))
         try:
             return response.json()
         except ValueError:
@@ -598,14 +630,22 @@ def _reachability(element) -> tuple:
     return (tier, element.occluded, not element.in_viewport)
 
 
+def _missing_key(cfg: Config) -> str:
+    """Name the variable the *selected* provider reads, then the other routes."""
+    needed = " or ".join(PROVIDERS.get(cfg.provider, {}).get("key_vars", ()))
+    lead = (f"JEV_PROVIDER={cfg.provider} needs {needed}. " if needed else "")
+    return (
+        f"Turbo mode needs a key for the decision model. {lead}The routes are: "
+        "TYPESAFE_API_KEY for Jev's own API, OPENROUTER_API_KEY with JEV_PROVIDER=openrouter "
+        "(equivalently, TYPESAFE_BASE_URL=https://openrouter.ai/api/alpha/decisions), or "
+        "PERPLEXITY_API_KEY with JEV_PROVIDER=perplexity for pplx-decider."
+    )
+
+
 def choose(cfg: Config, observation: Observation, goal: str, history: list[dict]) -> dict:
     """One TypeSafe request: which operation, and which target for each operation."""
     if not cfg.typesafe_key:
-        raise TurboUnavailable(
-            "Turbo mode needs a key for the decision model: TYPESAFE_API_KEY for Jev's own "
-            "API, or OPENROUTER_API_KEY with JEV_PROVIDER=openrouter (equivalently, "
-            "TYPESAFE_BASE_URL=https://openrouter.ai/api/alpha/decisions)."
-        )
+        raise TurboUnavailable(_missing_key(cfg))
 
     operations, heads = _operation_heads(observation)
     if not operations:
@@ -758,6 +798,13 @@ def _no_text_route(cfg: Config) -> str:
             "model through OpenRouter with JEV_PROVIDER=openrouter and name a chat model "
             "there with TEXT_MODEL, where OPENROUTER_API_KEY then covers both. Or pass the "
             "value yourself with browser_act. Nothing typed."
+        )
+    if cfg.provider == "perplexity":
+        return (
+            "TYPE_TEXT in turbo mode needs a model that writes text, and pplx-decider does "
+            "not: Perplexity's Decisions API answers typed questions only, and its PERPLEXITY_API_KEY "
+            "is not lent to the text helper. Set TEXT_MODEL_API_KEY (plus TEXT_MODEL) to a chat "
+            "provider, or pass the value yourself with browser_act. Nothing typed."
         )
     return (
         "TYPE_TEXT in turbo mode needs TEXT_MODEL_API_KEY (or pass the value yourself "
