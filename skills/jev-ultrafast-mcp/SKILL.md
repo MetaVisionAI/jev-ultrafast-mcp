@@ -1,316 +1,67 @@
 ---
 name: jev-ultrafast-mcp
 description: >
-  Hand a browser task to the jev-ultrafast-mcp server instead of driving the page
-  yourself. Use whenever a task involves a web page or a browser: filling in or
-  submitting a form, signing in, a daily check-in, clicking through a flow,
-  extracting something from a page, or proving a page reached a given state. Also
-  use when the user names a URL together with an action, or says "打开这个网页",
-  "帮我填一下", "签到", "在浏览器里点", "browser", "fill this form", "log in to",
-  "check in on", "scrape", or "click through".
+  把浏览器任务整个交给 jev-ultrafast-mcp 服务，而不是自己逐步操作页面。凡是涉及网页或浏览器的任务都用它：
+  填写或提交表单、登录、每日签到、点完一个流程、从页面提取内容、证明页面到达了某个状态。
+  用户给出网址并要求做某件事时也用它，或者说了 "打开这个网页"、"帮我填一下"、"签到"、
+  "在浏览器里点"、"预约"、"browser"、"fill this form"、"log in to"、"check in on"、
+  "scrape"、"click through"。
 agent_created: true
 ---
 
-# Browser work goes to `browser_goal`, in one call
+# 浏览器任务交给 `browser_goal`，一次调用完成
 
-A browser task is handed over **whole**. The loop runs server-side, driven by a
-decision model, so the page never enters your context and the task costs one
-turn instead of one per click.
+浏览器任务要**整个**交出去。循环在服务端运行，由决策模型驱动，页面内容不会进入你的上下文，
+整件事只花一轮，而不是每点一下花一轮。
 
 ```
 browser_goal(
-  goal="…",                                             # what "done" means, in words
-  url="https://…",                                      # omit to continue on the current page
-  verify=[{"type": "text_contains", "text": "…"}],      # how the page proves it worked
+  goal="…",                                             # 用文字说明怎样算完成
+  url="https://…",                                      # 省略则在当前页面上继续
+  verify=[{"type": "text_contains", "text": "…"}],      # 页面上用什么证明完成了
 )
 ```
 
-`url` + `goal` + `verify` is a complete handoff. **Do not** open the page and
-walk it yourself first — that is the thing this server exists to replace.
+`url` + `goal` + `verify` 就是一次完整的交接。**不要**先自己打开页面走一遍，那正是这个服务要替代的事。
 
-## Always pass `verify`
+## 一定要传 `verify`
 
-`status:` is the model's own summary; `verify` is checked by code afterwards, and
-when the two disagree the assertion wins. This is not a rare edge: the ordinary
-shape of a successful goal is that the last action *removes* what it acted on —
-click a check-in button and the button is gone — so the model, finding nothing
-left to do, reports `BLOCKED` on a goal that in fact succeeded. Without `verify`
-you cannot tell that apart from a real failure.
+- `status:` 是模型自己的总结，`verify` 是事后由代码核对的，两者不一致时以断言为准。成功的任务最常见的样子是，
+  最后一个动作把它操作的东西*移除*了，模型找不到事可做，就会对一个已经成功的任务报 `BLOCKED`。
+- 可用的检查：`text_contains`、`element_gone`、`url_contains`、`count_at_least`。选一个**只在动作完成后才出现**的字符串，
+  不要用导航栏或页头里本来就有的文字。
+- `text_contains` 只匹配页面正文，不匹配元素表。下拉框的选中值、按钮文字不能用它断言；价格、结果数量、标题可以。
+- 判断成功要同时看 `verified: PASS` 和最终 URL：URL 必须是只在动作完成后才存在的页面。
 
-Pick checks that are visible on the page afterwards: `text_contains`,
-`element_gone`, `url_contains`, `count_at_least`.
+多字段表单，或者拿不准 `verify` 怎么写时，读[怎么写 goal 和 verify](references/writing-goals.md)。
 
-Pick a string that exists **only after** the action. A string that is also in the
-navigation or the header (a menu label, the site name) will pass before anything
-happened, and a string you half-remember will fail on a goal that worked. When
-`verify` fails, re-read the element table and check your string first — a wrong
-assertion is far more common than a broken engine.
+## 读页面不是任务
 
-`text_contains` matches the page's **prose**, not the element table. A combobox's
-selected value, a button's label, a tab's name exist only in the table — asserting
-on them with `text_contains` fails on a page that is exactly right. Assert on
-things that appear in the text: a price, a result count, a heading. So "the ticket
-type is now One way" is not a `text_contains` check; "SGD 133" is.
+`browser_open`、`browser_observe` 和 `browser_assert` 是直接、确定、免费的，不需要 key。用户只想知道页面上写了什么，
+或者你需要看一个目标为什么失败时，用它们。把「看一眼」交给模型，是花钱去回答元素表本来就能回答的问题。
 
-A passing `verify` can still be wrong, and a wrong pass is worse than a fail: the
-server upgrades `status` to `done`, and the host stops on work that is not saved.
-Two checks that look specific and are not:
+## 什么时候退回手动循环
 
-- `url_contains` matches a prefix. A path that is also the prefix of the editor
-  passes before the save. Require the path that exists only after the action.
-- `text_contains` matches a draft. A form often paints the unsaved title into
-  the page before it is saved. A string that is on the page only after the
-  editor has closed is the saved result.
+只有三种情况：
 
-Judge the handoff by `verified: PASS` **and** the final URL being the page that
-only exists once the action is done. `verified: PASS` while the URL is still the
-editor means the checks were true too early. Rewrite `verify` and hand the goal
-over again. Do not finish the form yourself.
+1. `browser_goal` 返回 `turbo_unavailable:`，即没有配置模型 key。这时走 `browser_open` → 读元素表 → `browser_act` → `browser_assert`。
+2. 你只想看（见上一节）。
+3. `browser_goal` 返回 `blocked`，或者控件在页面上可见、元素表里却没有它，这时按坐标点击，见[怎么读失败结果](references/troubleshooting.md)。
 
-A multi-field form needs the constraints in the `goal`, not only in `verify`, and
-it needs `max_steps` above the default 20 — 40 is the right start. Name the field
-and the option text the page shows. Two dropdowns for the same fact can label
-their options differently; write each option's text as it appears, not a rule
-that excludes a word. Say the save click is allowed only after those values are
-on the inputs. `browser_goal` already follows a tab the current page opens, so
-the goal must not click that entry again.
+## 接下来读什么
 
-A date field is set by clicking it and then the day. Typing into it opens the
-picker on the wrong month. A clock field is set by clicking it and then the
-option whose name is the clock the goal asked for. The people field is the one
-that is typed: name the person in the goal, then say to click the suggestion. A
-name the goal states is the value, and the text helper must return it rather
-than declining the field. The decision sees the last 20 steps, including the
-text that was typed and whether the page changed, and `filled`, the current
-value of each editable field. A step the page did not answer is withdrawn after
-two tries, even when the model alternates targets.
-Each control carries a `kind` read from the page, not its label: `suggest`,
-`picker`, `submit`, `create`. After text is typed into a `suggest` field (the
-people box), the loop waits for its `option` rows, and a click on that field or
-on `submit` while a matching row is open selects the row. After a form was
-created and submitted, its create button is no longer offered, so a finished
-goal does not book a second copy. An unnamed button is offered only when
-nothing named is clickable.
-
-## Reading a page is not a task
-
-`browser_open`, `browser_observe` and `browser_assert` are direct, deterministic,
-free and need no key. Use them when the user only wants to know what a page says,
-or when you need to see why a goal failed. Routing a look through the model
-spends money to answer a question the element table already answers.
-
-## When to fall back to the manual loop
-
-Exactly three cases:
-
-1. `browser_goal` answers `turbo_unavailable:` — no model key is configured. Then
-   `browser_open` → read the element table → `browser_act` → `browser_assert`.
-2. You only want to look (see above).
-3. `browser_goal` answers `blocked`, or the element table has no ref for a control
-   that is still visible on the page — an icon, a canvas, or a clickable region
-   with no `button` and no role. Do not hand the picture to another model. Take a
-   viewport screenshot with `browser_act` (`{"op": "screenshot"}`), read that
-   image, and call `browser_click_at(x, y)`. `x` and `y` are fractions of the
-   picture: `0,0` is the top-left and `1,1` is the bottom-right. Put any text you
-   can read on the control in `label`. After the click, observe again. Once
-   ordinary inputs or buttons appear, go back to the element table; do not keep
-   clicking by coordinates. Login, a CAPTCHA, and payment confirmation still go
-   to `browser_request_help`. Coordinates are not a way around them.
-
-## Where to read next
-
-| Situation | Read |
+| 情况 | 读这里 |
 | --- | --- |
-| Login/CAPTCHA/OTP/consent/payment confirmation, two attempts without progress, or an operation error | [Human help and recovery](references/help-and-recovery.md) |
-| 操作飞书（任何功能） | [Feishu](references/feishu.md) |
+| 登录、验证码、短信或一次性验证码、授权同意、支付确认；两次尝试都没有进展；或者操作报错 | [人工协助与恢复](references/help-and-recovery.md) |
+| 多字段表单，或者不确定 `verify` 该怎么写 | [怎么写 goal 和 verify](references/writing-goals.md) |
+| 浏览器没连上、`browser_doctor` 显示异常，或者要选 attach 还是 launch | [浏览器的准备和连接](references/browser-setup.md) |
+| 结果是 `blocked`、`stopped`、`unconfirmed`、`turbo_unavailable`，或者控件不在元素表里 | [怎么读失败结果](references/troubleshooting.md) |
+| 同一件事每天都要做 | [录制和回放宏](references/macros.md) |
+| 操作飞书（任何功能） | [飞书](references/feishu.md) |
 
-## Recurring work: record it once, then replay for free
+以后其他网站的特有规则也按一站一个文件放：`references/<站点>.md`。
 
-`browser_macro` records the path a goal discovered and replays it **with no model
-calls**. Replay re-resolves each step by role + name against a fresh observation
-and refuses to act when the best match is weak or ambiguous (`threshold`, default
-`0.7`), so it fails loudly instead of clicking the wrong thing.
+## 汇报
 
-A chore that repeats *identically* is the wrong shape for `browser_goal` forever:
-pay the model once, `record_stop` it, then `run` the macro on later days. `params`
-fills `{{placeholders}}` in text and URLs, which is what lets one macro serve many
-days or many inputs. `inspect` shows the recorded steps before you trust them.
-
-**Replay only fits a flow whose steps are the same every time.** Judge a candidate
-by whether the *labels it clicks* are stable, not by whether the task is
-repetitive. A daily quiz whose question and options are new every morning is the
-wrong shape and belongs on `browser_goal` — the resolver refuses rather than
-guesses, so a macro there fails safely and uselessly. A check-in form whose buttons
-are always in the same place replays; a quiz whose answers change does not.
-
-## Before handing over: is there a browser at all?
-
-`browser_doctor` reports `connection` — `idle`, `attached` or `dropped`. **`idle`
-is the normal state, not a fault**: the server connects lazily, so a browser that
-has not been needed yet reads `connected: false, connection: idle`. Only `dropped`
-means a socket existed and died. Read `connected: false` as "nothing is listening
-on the CDP URL" only when something should be listening: in `attach` mode the
-server deliberately starts nothing (its own hint says "nothing is started for
-you"), so `JEVMCP_CDP_URL=http://127.0.0.1:9222` can point at empty air.
-
-Launch one yourself:
-
-```
-nohup "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
-  --remote-debugging-port=9222 \
-  --user-data-dir="$HOME/.jev-ultrafast-mcp/chrome-profile" \
-  --no-first-run --no-default-browser-check about:blank &
-```
-
-- **Headed, never headless** — a headless browser cannot clear Cloudflare and will
-  sit on "Just a moment…" forever.
-- **Never the default profile** — Chrome 136+ refuses to open a debugging port on
-  it. A dedicated `--user-data-dir` is what makes this legal.
-- The login you need lives in that profile directory, so signing in once there
-  makes every later handoff work.
-- Do **not** type the user's password for them. If a goal sits behind a login, hand
-  that step to the user with `browser_request_help`, then hand the task back to
-  `browser_goal` — see [Human help and recovery](references/help-and-recovery.md).
-
-Two traps when supplying that browser:
-
-- **A 404 from `/json/version` does not mean nothing is listening.** Chrome 144+'s
-  `chrome://inspect/#remote-debugging` server is WebSocket-only and answers 404 to
-  every `/json/*` path. The port and the browser WebSocket path are in
-  `DevToolsActivePort` inside the browser's data directory, and the server reads
-  them from there — so a browser started by that toggle (including the user's own
-  Chrome, which is where their logins are) works fine. If the data directory is
-  unusual, set `JEVMCP_ATTACH_PROFILE_DIR`.
-- **One port, one browser.** Two Chromes cannot share 9222: whichever binds IPv4
-  answers, and if that is the wrong one you get 404s while the good instance sits
-  on `[::1]`. If a launch seems to have silently failed, check
-  `lsof -nP -iTCP:9222 -sTCP:LISTEN` for *two* rows before relaunching. Also note
-  `open -na "Google Chrome" --args …` can drop the arguments and start the default
-  profile — verify the profile from the process's own open files rather than
-  trusting the command you typed.
-
-## `attach` costs a click per connection; `launch` costs one login
-
-On Chrome 144+ the `chrome://inspect/#remote-debugging` server shows an
-**"Allow remote debugging?" dialog for every incoming connection** — not once per
-launch. Attach mode therefore asks the user to approve *every* connection, and a
-reconnect **is** a connection, so anything recurring pays a click each time.
-
-`launch` mode with a non-default `--user-data-dir` needs neither the toggle nor
-any dialog (measured: launch, connect, `Browser.getVersion` in 4.6s, zero
-prompts). The price is that a fresh profile is signed out once. For a recurring
-job that is the better trade — sign in in that profile a single time, and every
-later run is prompt-free.
-
-Attach to the user's own Chrome only when their existing logins are the point
-*and* the run is a one-off.
-
-## Reading a failure
-
-Two signatures that look like engine bugs but are not:
-
-- **`status: blocked`, `steps: 0`.** The model could not find anything to act on.
-  Check, in order: (1) is your `verify` string actually on the page? (2) is the
-  target **in the element table**? `observe` reports `omitted N low-priority` —
-  anything not in the table is invisible to the model, and a target it cannot see
-  can only produce `blocked`. Both of these are correct behaviour, not failures.
-  A large `omitted` count used to make this non-deterministic — the ranking put
-  viewport position above role, so the same goal could reach its target once and
-  report `blocked` at step 0 the next time. That is fixed (role now outranks
-  position, in both `observer.js` and `policy.reachable_first`), so a repeated
-  `blocked` at step 0 is a statement about your goal or your `verify`, not about
-  the clock.
-  The clock is no longer a candidate at all: after opening a `url` the server
-  waits for the page to **stop fetching** as well as for its element table to
-  stop changing before it asks the model anything (`JEVMCP_SETTLE_TIMEOUT`, 4s
-  by default). An app that has not fetched its bundle yet is a shell, and a shell
-  holds perfectly still — so "the table stopped changing" alone used to settle on
-  a page with no controls on it and hand back `blocked` at step 0 twice on a page
-  that rendered a second later. If a `blocked` at step 0 still survives that,
-  raise `JEVMCP_SETTLE_TIMEOUT` before you rewrite the goal.
-  If the page in the final view is a sign-in, a CAPTCHA or a code prompt, the
-  goal is not wrong and no rewrite will get past it: that is a human step, so
-  follow [Human help and recovery](references/help-and-recovery.md).
-- **`status: stopped: no progress`.** The page stopped changing for the limit
-  `browser.py` defines, so the run ended rather than spending the rest of
-  `max_steps` on `WAIT`s. This is the usual shape of a goal that has *already
-  succeeded* — the last action removed the thing it acted on — so read `verified`
-  before you read `status`: a passing assertion upgrades this to `done`. If
-  `verified` is absent or failing, the goal genuinely stalled and needs a
-  different goal string, not a retry — unless what stalled it is a human step
-  (a login wall, a slider, an SMS code), which no goal string clears; then
-  follow [Human help and recovery](references/help-and-recovery.md).
-- **`turbo_unavailable: … TYPE_TEXT …`.** The model *did* answer — it returned a plan
-  that types into a field, and the **policy layer** refused it. The optional text
-  helper only affects writing a value into an input; a click-only task needs no key.
-  Do not report this as "the model is unavailable".
-
-  Which dead end it is decides the fix, so read the sentence rather than the code:
-  - **Jev's own API** (`JEV_PROVIDER=typesafe`, the default) answers typed questions
-    and never writes prose, so it has no chat route for the helper to inherit. Either
-    give the helper its own chat provider (`TEXT_MODEL_API_KEY`, plus `TEXT_MODEL`),
-    or move the decision model to `JEV_PROVIDER=openrouter` and name a chat model
-    there with `TEXT_MODEL`.
-  - **OpenRouter** (`JEV_PROVIDER=openrouter`) does serve chat, so with
-    `OPENROUTER_API_KEY` set the helper inherits the key *and* the URL, and the only
-    thing still missing is `TEXT_MODEL` — `deepseek-chat` is not an OpenRouter slug.
-    A message asking for `TEXT_MODEL_API_KEY` while on OpenRouter therefore means one
-    of two things: no key at all, or `TEXT_MODEL_BASE_URL` set without its key, which
-    is read as the explicit route and will not borrow the decision model's key.
-  - Either way **the key and the URL come from the same provider.** Borrowing a key
-    across providers earns a 401 that names the company you did not call, which is a
-    worse failure than the refusal it replaced. `browser_doctor` reports the resolved
-    provider and whether the helper has a route.
-
-  Workaround while no route is configured: **put the parameters in the URL**
-  and let the model only wait and read. Many sites accept them, including
-  natural-language queries — a flight search becomes
-  `…/travel/flights?q=One way flights from SIN to PQC on 2026-09-26`, and then no
-  typing is needed at all. Adding `hl=en` (or the site's locale parameter) also
-  makes the page easier to read and to assert on.
-
-Judge a handoff by `verified: PASS` and by the final URL being the page that exists
-only after the action — a URL that merely changed can still be the editor. Not by
-`status`.
-
-**`status: unconfirmed: …` means the model reported `done` and `verify` did not confirm it.** The
-assertion wins, so treat it as unfinished — but check your own string first, because a wrong
-`verify` produces the same line. Measured on a real daily check-in: the model clicked the submit
-button, reported `done` twice, and moved no points either time. Note also that `done` can arrive at
-`steps: 0` with the element you named not even on the page — a model that finds its target absent
-says `done` about as readily as it says `blocked`, which is the whole reason `verify` is not
-optional.
-
-## Operational gotchas that waste a run
-
-- **`browser_goal` follows a tab the current page just opened.** A click that uses
-  `target=_blank` (Feishu's calendar entry is one) used to leave the goal on the
-  page that did the opening, so the model clicked it again and opened another tab
-  each time. The goal now switches to that tab and keeps driving there; the page
-  it left stays open. `browser_act` still only reports the new tab (`NEW TAB
-  opened: …`) and leaves the switch to you: `browser_tabs` with `action=switch`
-  and that tab's `target_id`.
-- **The page must be in a foreground tab.** A backgrounded tab is throttled by
-  Chrome, and a bot check (Cloudflare's "Just a moment…") then never clears — it
-  will sit there for the full timeout while the Ray ID changes every attempt.
-  Set `JEVMCP_FOREGROUND=1` in the server's env.
-- **The server reads its config once, at import.** After editing the MCP config
-  you must restart the client (and in WorkBuddy, click **Trust** again if you
-  added or removed an env *key name* — values alone do not change the approval).
-- **A dropped socket is self-healing, and no longer needs a restart.** The manager
-  checks liveness when a tool asks for its session — not only when something
-  reads the socket directly — and, on a dead socket, drops it *together with
-  the sessions bound to it* (a target id exists only on the socket that minted it)
-  and opens a fresh one. `doctor` shows `connection: dropped` for that case instead
-  of a stale `connected: true`. A goal that answers `transport closed … keepalive
-  ping timeout` is that case: hand the same goal over again. Do not finish the
-  page yourself. If the second handoff dies the same way, the server predates
-  this check — restart it.
-- **Login state lives in the browser profile**, not in the server. A task behind
-  a login only works while that profile is signed in.
-
-## Reporting
-
-The run reports its own bill (`turbo: N decisions · N tokens · …`). Quote the
-`verified: PASS/FAIL` line and the assertion details rather than the model's
-summary — and if `verify` failed, say so plainly instead of reporting success.
+每次运行都会报告自己的开销（`turbo: N decisions · N tokens · …`）。引用 `verified: PASS/FAIL` 这一行和断言细节，
+而不是模型的总结；如果 `verify` 失败了，要直接说出来，不要报告成功。

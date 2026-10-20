@@ -1,39 +1,30 @@
-## Human steps and recovery
+## 人工协助与恢复
 
-Nothing in the server decides that a page needs a person. You do, from what the
-observation shows, and this page is the rule for it.
+服务端不会自己判断页面需要人来处理。由你根据观察结果来判断，这一页就是判断规则。
 
-With help enabled, request help for login, CAPTCHA, SMS or OTP codes, payment
-confirmation, consent, or after two attempts make no progress:
+协助功能开启时，遇到登录、验证码、短信或一次性验证码、支付确认、授权同意，或者两次尝试都没有进展，就请求协助：
 
 ```
 browser_request_help(prompt="请在此窗口登录淘宝，完成后点击“完成并交还控制权”",
                      targets=["e3"])
 ```
 
-What usually points here in an observation or a goal result:
+观察结果或目标结果里，通常指向这里的信号：
 
-- a login form, a password field, or a QR-code sign-in panel in the element table;
-- `! dialog open: …` naming a sign-in or verification dialog;
-- `! N cross-origin frame(s) not readable (…)` whose sources are a login or
-  CAPTCHA host — `login.taobao.com`, `passport.…`, `turing.captcha.gtimg.com`,
-  `geetest`, `recaptcha`, `hcaptcha`;
-- `browser_goal` answering `blocked` or `stopped: no progress` twice on the same
-  page, after the checks in SKILL.md's "Reading a failure" have been ruled out.
+- 元素表里有登录表单、密码框或扫码登录面板；
+- `! dialog open: …` 指出了一个登录或验证对话框；
+- `! N cross-origin frame(s) not readable (…)`，而且来源是登录或验证码域名，比如 `login.taobao.com`、`passport.…`、
+  `turing.captcha.gtimg.com`、`geetest`、`recaptcha`、`hcaptcha`；
+- 在排除了[怎么读失败结果](troubleshooting.md)里的检查项之后，`browser_goal` 在同一页面上两次返回 `blocked` 或 `stopped: no progress`。
 
-The call brings the session's tab to the front and shows a panel on the page
-("Agent 需要你的帮助") with the prompt, a note field, and two buttons:
-"完成并交还控制权" and "取消请求". It blocks until the user presses one, the
-completion criteria hold, or the timeout (default 5 minutes, at most 30) runs out.
-The panel is put back if the page navigates while the user works, and removed
-before the call returns.
+这个调用会把会话所在的标签页切到前台，在页面上显示一个面板（「Agent 需要你的帮助」），里面有提示、备注框和两个按钮：
+「完成并交还控制权」和「取消请求」。它会一直等待，直到用户按下其中一个按钮、完成条件成立，或者超时（默认 5 分钟，最长 30 分钟）。
+如果用户操作时页面跳转了，面板会重新放回去；调用返回前面板会被移除。
 
-Use a precise prompt that says what to do and when to press the button. Observe
-first and pass fresh refs, or CSS selectors, as `targets`; omit them when no
-control fits. Refs are outlined by their position on the page, so a ref that is
-covered or off-screen is reported unresolved rather than outlined.
+提示要写清楚做什么、什么时候按按钮。先观察，再把最新的 ref 或 CSS 选择器作为 `targets` 传进去；没有合适的控件就省略。
+ref 是按它在页面上的位置圈出来的，所以被遮挡或在屏幕外的 ref 会被报告为无法定位，而不会被圈出。
 
-Use completion criteria only for a clear, stable success signal:
+只有在有清晰、稳定的成功信号时，才使用完成条件：
 
 ```
 completion={"any": [{"selector_missing": "#login-dialog"},
@@ -41,35 +32,24 @@ completion={"any": [{"selector_missing": "#login-dialog"},
             "stable_for_ms": 1000}
 ```
 
-`any` or `all`, with at most eight conditions in total, chosen from
-`url_contains`, `url_matches`, `selector_exists`, `selector_missing`,
-`text_exists` and `text_missing`. `url_matches` is a Python regular expression of
-at most 128 characters; an invalid or oversized pattern is refused before help
-starts. A condition must hold for `stable_for_ms` (default 1000) before it
-completes the request, so a page that flickers through the success state does
-not end it early. The user can always finish manually.
+用 `any` 或 `all`，总共最多八个条件，从 `url_contains`、`url_matches`、`selector_exists`、`selector_missing`、
+`text_exists` 和 `text_missing` 中选择。`url_matches` 是最长 128 个字符的 Python 正则表达式；无效或过长的表达式会在协助开始前被拒绝。
+条件要持续成立 `stable_for_ms`（默认 1000）才会完成请求，所以页面在成功状态上一闪而过不会提前结束。用户随时可以手动结束。
 
-| Result | Next step |
+| 结果 | 下一步 |
 | --- | --- |
-| Help `continued` / `completed` | Observe again, then resume with fresh refs, or hand the task back to `browser_goal`. |
-| Help `cancelled` / `timed_out` | Respect the rejection or the blocker; do not repeat the request. |
-| Help `disabled` | No human action was confirmed. Re-observe and follow the disabled-help rules below. |
-| Stale ref | Observe and retry the intended action once. |
-| Unknown session or tab | List sessions or tabs; never guess IDs or use another task's session. |
-| Timeout or unknown effect | Inspect current state before retrying; the action may already have happened. |
+| 协助返回 `continued` / `completed` | 重新观察，然后用新的 ref 继续，或者把任务交回 `browser_goal`。 |
+| 协助返回 `cancelled` / `timed_out` | 尊重用户的拒绝或这个阻碍；不要重复请求。 |
+| 协助返回 `disabled` | 没有确认任何人工操作。重新观察，按下面「协助被禁用」的规则处理。 |
+| ref 过期 | 观察后，把原本要做的动作重试一次。 |
+| 未知的会话或标签页 | 列出会话或标签页；永远不要猜 ID，也不要用别的任务的会话。 |
+| 超时或结果未知 | 重试前先检查当前状态，那个动作可能已经发生了。 |
 
-A note the user typed comes back with the result; read it, it may change the
-plan. Navigation alone is not completion: a page that moved while the user
-worked has not told you the step is done.
+用户填写的备注会随结果一起返回；要读它，它可能改变计划。页面跳转本身不代表完成：用户操作时页面动了，并不说明这一步已经做完。
 
-**Help disabled** (`JEVMCP_REQUEST_HELP=off`, or a headless browser that nobody
-can see): do not request help, and do not change the setting or switch to a
-headed browser to get round it. Use existing login state, authorized inputs and
-viable alternatives — for example putting the query in the URL, as SKILL.md
-describes. Phone-only QR scans, face verification, missing SMS codes or
-image-only CAPTCHAs may remain blocked. Report a specific blocker only when
-inputs or capabilities are missing or viable approaches are exhausted; continue
-independent work. Do not loop on identical failures or repeat unknown effects.
+**协助被禁用**（`JEVMCP_REQUEST_HELP=off`，或者是没人能看到的无头浏览器）：不要请求协助，也不要为了绕过它去改设置或换成有界面的浏览器。
+使用已有的登录状态、已授权的输入和可行的替代方案，比如像[怎么读失败结果](troubleshooting.md)里说的那样把查询放进 URL。只能用手机扫的二维码、人脸验证、
+收不到的短信验证码或纯图片验证码，可能仍然无法通过。只有在缺少输入或能力、或者可行的办法都试过了时，才报告具体的阻碍；
+其他独立的工作照常继续。不要在同样的失败上循环，也不要重复结果未知的操作。
 
-Never type the user's password, read it back, or try to solve a CAPTCHA for
-them. Those are the steps this tool exists to hand over.
+永远不要替用户输入密码、把密码读出来，或者尝试替他们破解验证码。这些正是这个工具要交给人的步骤。

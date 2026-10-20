@@ -1,54 +1,66 @@
-# Feishu
+# 飞书
 
-Read this when the task is on Feishu (飞书), whatever the feature. The rules below
-were measured on the calendar; they are properties of that site, not of forms in
-general.
+只要任务在飞书上，不管是哪个功能，都读这一页。下面的规则是在飞书网页版日历上实测出来的，只适用于飞书，不是表单的通用规律。
+飞书其他功能（消息、文档等）的规则以后也追加到这个文件里，不另开文件。
 
-## Creating an event
+## 日历：入口
 
-The calendar opens in a new tab from the messenger sidebar. `browser_goal` follows
-that tab. Do not click the calendar entry again.
+1. 打开 `https://<租户>.feishu.cn/next/messenger/`。
+2. 点左侧栏的「日历」。日历会在新标签页打开，`browser_goal` 会自动跟过去。不要再点一次「日历」，否则每点一次就多开一个标签页。
+3. 日历默认是周视图，URL 是 `/calendar/week`（后面可能带 `?ikey=…`）。
 
-A date field is set by clicking it and then the day. Typing into it opens the
-picker on the wrong month.
+## 日历：新建日程的操作步骤
 
-The start-time dropdown lists clocks. Click the field, then the option whose name
-is exactly that clock (`14:00`). An option whose name contains `小时` is a
-duration counted from the start clock; do not pick it for the start time.
+1. **只用创建按钮新建。** 点周视图左上角的创建按钮，元素表里名为 `icon-add`。
+   - 不要点日期表头（例如「周三 21」）：实测会直接打开一个**勾着「全天」**的新日程。
+   - 不要点周视图网格里的空白格：可能会建出一个「(无主题)」日程。
+2. **标题。** 在「添加主题」里输入标题，例如「研发会议」。
+3. **先确认「全天」没有勾选。** 「全天」勾着的时候，编辑页没有开始时间和结束时间输入框，
+   原来的位置只有一个提醒下拉「当天08:00」。「当天08:00」是全天日程的提醒，不是会议时间，不要去点它。
+   要定具体时间，先点一次「全天」把它取消。
+4. **开始日期。** 点「开始 日期」，再点那一天（例如 21）。不要往日期框里打字，那会让日历跳到错误的月份。
+5. **开始时间。** 点「开始 时间」，再点名称**恰好**是目标时间的选项，例如 `14:00`。
+   这个下拉里名称带「小时」的选项是时长，不要拿来设开始时间。
+6. **结束时间。** 点「结束 时间」。这个下拉里**每一项**都是「时刻 + 时长」，例如 `15:00 (1小时)`。
+   点名称以目标结束时刻开头的那一项。如果写成「带小时的都不要选」，结束时间下拉里就没有可选项了，
+   模型会反复点结束时间框，最后带着默认的 `14:30` 保存。
+7. **再看一眼结束日期。** 实测出现过结束日期被带到第二天的情况：日程变成「10月21日 14:00 - 10月22日 15:00」，
+   在周视图里显示成顶部的跨天条「研发会议 日期」，而不是 14:00–15:00 的时间块。保存前要确认「结束 日期」和开始日期是同一天。
+8. **参与人。** 在「添加联系人或群」里输入一个人名，等建议行出现（例如「杨飞 技术部」）后点它。一次只加一个人，
+   加完再输入下一个。输入框里留着名字，**不等于**这个人已经加进去了；以右侧「参与者 (N)」的人数和名单为准。
+9. **不要碰侧边网格。** 编辑页右侧的网格里，每个小时都有一个叫「时间」的格子。那些格子不是设置时间的方式，不要点。
+10. **保存。** 只有在标题、开始日期、开始时间、结束时间、结束日期都对，而且每个参与人都出现在参与者名单里时，才点「保存」。
+11. **发送邀请。** 保存后会弹出「向参与者发送日程邀请？」，有「继续编辑」「不发送」「发送」三个按钮。点「发送」。
+    点「继续编辑」会回到编辑页，日程还没保存。
+12. 发送后页面回到周视图（`/calendar/week`），不再是编辑页（`/calendar/eventedit`），页面上会短暂出现「保存成功」。
 
-The end-time dropdown is not a list of clocks. Every option is a clock plus a
-duration, such as `15:00 (1小时)`. Click the option whose name starts with the
-end clock the goal asked for. A rule of "skip anything containing 小时" excludes
-every end-time option, and the model then clicks the field again instead of
-choosing one.
+## 日历：修改已有日程
 
-The editor's side grid repeats the name `时间`, one cell per hour. Those cells
-are not how the time is set. Do not click them.
+- 在周视图里点日程块，会弹出详情卡，不会直接进入编辑页。
+- 详情卡上的「向某某发送一条消息」「已接受」「拒绝」「待定」都不是编辑入口，点它们不会打开编辑页。
+  实测中模型反复去点这几个控件，空耗了很多步。
+- 详情卡上的编辑入口在元素表里没有名称，目前不能让目标按名称稳定地点中它。要改已有日程，更稳妥的做法是请用户在页面上打开编辑页
+  （用 `browser_request_help`），再把剩下的修改交给 `browser_goal`；或者删掉重建，删除前要先征得用户同意。
+- 改完保存后，同样会弹出「向参与者发送日程邀请？」，点「发送」。
 
-Saving is allowed only after the inputs show the start clock, the end clock, and
-every person the goal named. Saving opens 「向参与者发送日程邀请？」 with
-「继续编辑」, 「不发送」, and 「发送」. Click 「发送」 to deliver the invite.
-「继续编辑」 leaves the event unsaved. The page then returns to the week view
-(`/calendar/week`), not the editor (`/calendar/eventedit`).
+## 日历：怎么证明成功
 
-## How to prove it
+- `url_contains: /calendar/` 在编辑页上也成立，要用 `/calendar/week`。
+- 只断言标题（例如 `text_contains: "研发会议"`）会命中未保存的草稿：编辑页会在保存前把标题画在侧边栏里。
+- 保存成功的定时日程，在周视图里会显示成带时间的块，页面正文里有「研发会议 14:00 - 15:00」这样的文字。
+  断言这个字符串，时间错了检查就会失败。
+- 全天日程或跨天日程不会有这段文字，只显示「研发会议 日期」这样的顶部横条，所以上面的断言也能发现「全天」没取消、
+  或者结束日期跑到第二天这两种错误。
+- 参与人不在周视图正文里。要核对参与人，需要打开详情卡读它的正文，例如「2 位参与者」和名单。
 
-`url_contains` of `/calendar/` is true of the editor as well as the week view.
-Require `/calendar/week`.
+## 示例：新建一个定时日程
 
-`text_contains` of the title alone passes on the unsaved draft: the editor paints
-the title into the side panel before 保存. On the week view, after the editor has
-closed, the event's own text includes the title and the clocks, for example
-`研发会议 14:00 - 15:00`. Assert on that string. A wrong end time fails the check.
-
-## Example
-
-Tomorrow 14:00–15:00, title 研发会议, with 杨飞 and 张晋伟. `max_steps` 40.
+明天 14:00–15:00，标题「研发会议」，参与人杨飞、张晋伟。`max_steps` 设为 40。
 
 ```
 browser_goal(
-  goal="在飞书为明天预约研发会议。日期点击后再点选那一天，不要往日期框里打字。开始时间点选名称恰好是「14:00」的选项。结束时间点选名称以「15:00」开头的选项，例如「15:00 (1小时)」；结束时间下拉里每一项都带时长，不要因为带「小时」而跳过。不要点侧边网格里的「时间」。参与人框先输入杨飞并点建议，再输入张晋伟并点建议。只有开始时间是14:00、结束时间是15:00、杨飞和张晋伟都在参与人里时才点保存。保存后弹出「向参与者发送日程邀请？」就点「发送」。发送后留在周视图，不要再点刚创建的日程。",
-  url="https://<tenant>.feishu.cn/next/messenger/",
+  goal="在飞书为明天预约研发会议，14:00到15:00。用左上角的创建按钮新建，不要点日期表头，也不要点网格空白格。标题填「研发会议」。如果「全天」是勾选的，先点一次取消它；「当天08:00」是全天提醒，不要点。开始日期点击后再点选那一天，不要往日期框里打字。开始时间点选名称恰好是「14:00」的选项。结束时间点选名称以「15:00」开头的选项，例如「15:00 (1小时)」；结束时间下拉里每一项都带时长，不要因为带「小时」而跳过。结束日期必须和开始日期是同一天。不要点侧边网格里的「时间」。参与人框先输入杨飞并点建议，再输入张晋伟并点建议。只有开始时间是14:00、结束时间是15:00、结束日期是同一天、参与者名单里有杨飞和张晋伟时才点保存。保存后弹出「向参与者发送日程邀请？」就点「发送」。发送后留在周视图，不要再点刚创建的日程。",
+  url="https://<租户>.feishu.cn/next/messenger/",
   max_steps=40,
   verify=[
     {"type": "url_contains", "text": "/calendar/week"},
