@@ -640,6 +640,14 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
             model_ms += decision.get("latency_ms") or 0
             tokens += _tokens(decision.get("usage"))
             operation = decision["operation"]
+            suggestion = policy.pending_suggestion(observation, memory)
+            if operation == "DONE" and suggestion is not None:
+                # A name left in the box with its row still open is not an
+                # invitee; finishing now drops that person from the form.
+                trace.append(f"  -   choosing {suggestion.ref} {suggestion.name} before DONE")
+                operation = "CLICK"
+                decision = {**decision, "operation": "CLICK",
+                            "ref": suggestion.ref, "target": suggestion.name}
             if operation in {"DONE", "BLOCKED"}:
                 # "Nothing to act on" about a page that has not finished
                 # rendering is not an answer about the goal, it is an answer
@@ -663,20 +671,23 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
             if decision.get("ref"):
                 op["ref"] = decision["ref"]
             chosen = observation.by_ref.get(decision["ref"]) if decision.get("ref") else None
-            suggestion = policy.pending_suggestion(observation, memory)
             typed_ref = policy.pending_type_ref(memory)
             submitting = chosen is not None and chosen.kind == "submit"
-            if operation == "CLICK" and suggestion is not None and (
-                    decision.get("ref") == typed_ref or submitting):
+            if suggestion is not None and (
+                    operation == "TYPE_TEXT"
+                    or (operation == "CLICK" and (decision.get("ref") == typed_ref or submitting))):
                 # Text typed into a `suggest` field is not a value until its row
-                # is chosen. Clicking the field again closes the list, and
-                # submitting now saves the form without it.
+                # is chosen. Clicking the field again closes the list, submitting
+                # now saves the form without it, and typing the next name over it
+                # replaces the first person with the second.
                 trace.append(
                     f"  -   choosing {suggestion.ref} {suggestion.name} "
                     f"instead of {decision.get('ref')} {decision.get('target') or ''}"
                 )
-                decision = {**decision, "ref": suggestion.ref, "target": suggestion.name}
-                op["ref"] = suggestion.ref
+                operation = "CLICK"
+                decision = {**decision, "operation": "CLICK",
+                            "ref": suggestion.ref, "target": suggestion.name}
+                op = {"op": "click", "ref": suggestion.ref}
                 chosen = suggestion
             elif operation == "CLICK" and policy.click_should_type(chosen):
                 # The model clicks an empty box to "focus" it, and the page does

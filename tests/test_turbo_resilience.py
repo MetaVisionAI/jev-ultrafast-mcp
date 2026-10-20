@@ -300,6 +300,33 @@ def test_a_click_on_the_field_just_typed_selects_the_suggestion(monkeypatch):
     assert "choosing e2 杨飞 技术部" in out
 
 
+def test_typing_the_next_name_selects_the_open_suggestion_first(monkeypatch):
+    """Typing 张晋伟 over an unchosen 杨飞 left only the second person invited."""
+    session = _FakeSession([_ok(), _ok()])
+    _scripted_reads(session, *_suggest_page())
+
+    out = _goal_with(monkeypatch, session, [_type_people(), _type_people()])
+
+    assert "status: done" in out, out
+    assert session.acts[1][0] == {"op": "click", "ref": "e2"}, session.acts
+    assert "choosing e2 杨飞 技术部" in out
+
+
+def test_finishing_with_a_suggestion_open_selects_it_first(monkeypatch):
+    """A DONE with the person's row still open reported a form that was missing them."""
+    session = _FakeSession([_ok(), _ok()])
+    _scripted_reads(session, *_suggest_page())
+
+    out = _goal_with(monkeypatch, session, [
+        _type_people(),
+        {"operation": "DONE", "confidence": 0.9},
+    ])
+
+    assert "status: done" in out, out
+    assert session.acts[1][0] == {"op": "click", "ref": "e2"}, session.acts
+    assert "before DONE" in out
+
+
 def test_clicking_an_empty_suggest_field_types_the_goal_s_value(monkeypatch):
     """The people box was clicked twice and the name was never entered."""
     session = _FakeSession([_ok()])
