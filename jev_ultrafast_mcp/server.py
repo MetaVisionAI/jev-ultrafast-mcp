@@ -129,6 +129,25 @@ def _brief(observation: Observation) -> str:
             f"{observation.reachable} reachable, obs#{observation.sequence}")
 
 
+def _await_suggestions(tab, observation: Observation, timeout: float = 2.0) -> Observation:
+    """After typing into a `suggest` field, re-read until a new option row appears.
+
+    Search results are a network round trip behind the keystrokes, so the
+    observation taken with the type shows the field and not the rows. Any
+    change is not enough: a spinner or the field's own value changes first.
+    """
+    known = {element.ref for element in observation.elements if element.role == "option"}
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        time.sleep(min(0.15, max(0.0, deadline - time.monotonic())))
+        nxt = tab.observe()
+        if nxt is not None and any(
+                element.role == "option" and element.ref not in known and not element.disabled
+                for element in nxt.elements):
+            return nxt
+    return tab.last or observation
+
+
 def _first_read(tab) -> Observation:
     """Read a freshly opened page until it has stopped growing.
 
@@ -157,14 +176,25 @@ def _first_read(tab) -> Observation:
     """
     observation = tab.observe()
     seen = {element.ref for element in observation.elements}
+    # A new tab is reported once, on the observation that first sees it. This
+    # read polls, so a later poll agrees with the one before it and the tab
+    # drops out of `new_tabs`. The caller follows after this returns, and it
+    # can only follow a tab that is still on the observation it is handed.
+    opened = list(observation.new_tabs)
+    opened_ids = {tab_info.get("target_id") for tab_info in opened}
     deadline = time.monotonic() + CONFIG.settle_timeout
     while time.monotonic() < deadline:
         time.sleep(CONFIG.settle_poll_ms / 1000.0)
         observation = tab.observe()
+        for tab_info in observation.new_tabs:
+            if tab_info.get("target_id") not in opened_ids:
+                opened.append(tab_info)
+                opened_ids.add(tab_info.get("target_id"))
         refs = {element.ref for element in observation.elements}
         if refs == seen and tab.page_is_idle():
             break
         seen = refs
+    observation.new_tabs = opened
     return observation
 
 
@@ -540,27 +570,62 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
         started = time.perf_counter()
         if url:
             tab.navigate(url)
+        # Captured before the first read, which replaces `last`. A tab the
+        # previous tool already reported is no longer "new" to that read, but
+        # it is still the page this goal should be driving.
+        pending = list(tab.last.new_tabs) if tab.last is not None else []
         observation = _first_read(tab)
         trace: list[str] = []
+        if pending:
+            seen_ids = {item.get("target_id") for item in observation.new_tabs}
+            observation.new_tabs = [
+                item for item in pending if item.get("target_id") not in seen_ids
+            ] + list(observation.new_tabs)
+        followed = tab.follow_new_tab(observation)
+        if followed:
+            trace.append(f"  ->  followed new tab {followed.get('url')}")
+            observation = _first_read(tab)
         status = "running"
         steps = 0
+        # A helper that answers {"text": null} is declining one field. Typing a
+        # guess would be worse, and ending the goal would throw away every
+        # other way forward. The field stays clickable; it just stops being
+        # offered for typing.
+        declined_refs: set[str] = set()
+        # The decision model is called once per step and keeps no conversation.
+        # This list is the memory: what was typed, whether the page moved, and
+        # the value the field held afterwards. `tab.history` only knows that a
+        # click was dispatched.
+        memory: list[dict] = []
         stale = 0        # re-observations spent on the step currently in flight
         recovered = 0    # re-observations spent by the goal as a whole
         re_read = False  # the one re-read allowed when the first answer is BLOCKED
         calls = 0        # decision requests, including the one that said DONE
+        flaked = 0       # one malformed decision is asked again; a second one stops
         model_ms = 0     # time spent waiting on the decision model
         browser_ms = 0   # time spent waiting on the page
         tokens = 0
         while steps < max_steps:
-            history = [{"op": step.op, "ref": step.ref, "target": step.target, "ok": step.ok}
-                       for step in tab.history[-10:]]
+            history = memory[-20:]
+            policy.retire_create(observation, memory)
+            for ref in declined_refs:
+                declined = observation.by_ref.get(ref)
+                if declined is not None:
+                    declined.editable = False
             try:
                 decision = policy.choose(CONFIG, observation, goal, history)
             except policy.TurboUnavailable as exc:
                 # A provider that fails mid-run must not erase the steps already
                 # taken: those are the whole record of how far the goal got, and
                 # without them the host cannot tell a goal that was one click
-                # from done from one that never started.
+                # from done from one that never started. One malformed envelope
+                # is a flake; asking again is cheaper than abandoning a form
+                # that is already filled in.
+                if flaked < 1 and isinstance(exc, policy.MalformedAnswer):
+                    flaked += 1
+                    calls += 1
+                    trace.append(f"  -   {exc} Asking again.")
+                    continue
                 status = f"turbo_unavailable: {exc}"
                 trace.append(f"  !   step {steps + 1}: {exc}")
                 break
@@ -572,10 +637,12 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
                 # "Nothing to act on" about a page that has not finished
                 # rendering is not an answer about the goal, it is an answer
                 # about the clock. Re-read once, only while nothing has been
-                # attempted yet, and only out of the goal-wide recovery budget
+                # attempted yet — or the tab we just followed is still
+                # `about:blank` — and only out of the goal-wide recovery budget
                 # so `max_steps` stays a bound on billed requests.
-                if (operation == "BLOCKED" and steps == 0 and not re_read
-                        and recovered < max_steps):
+                blank = observation.url.startswith("about:")
+                if (operation == "BLOCKED" and not re_read and recovered < max_steps
+                        and (steps == 0 or blank)):
                     re_read = True
                     recovered += 1
                     trace.append("  -   BLOCKED on a page with nothing to act on; "
@@ -588,13 +655,44 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
             op: dict = {"op": policy.OPERATION_TO_ACT[operation]}
             if decision.get("ref"):
                 op["ref"] = decision["ref"]
+            chosen = observation.by_ref.get(decision["ref"]) if decision.get("ref") else None
+            suggestion = policy.pending_suggestion(observation, memory)
+            typed_ref = policy.pending_type_ref(memory)
+            submitting = chosen is not None and chosen.kind == "submit"
+            if operation == "CLICK" and suggestion is not None and (
+                    decision.get("ref") == typed_ref or submitting):
+                # Text typed into a `suggest` field is not a value until its row
+                # is chosen. Clicking the field again closes the list, and
+                # submitting now saves the form without it.
+                trace.append(
+                    f"  -   choosing {suggestion.ref} {suggestion.name} "
+                    f"instead of {decision.get('ref')} {decision.get('target') or ''}"
+                )
+                decision = {**decision, "ref": suggestion.ref, "target": suggestion.name}
+                op["ref"] = suggestion.ref
+                chosen = suggestion
+            elif operation == "CLICK" and policy.click_should_type(chosen):
+                # The model clicks an empty box to "focus" it, and the page does
+                # not change, so the run never gets as far as typing the name.
+                operation = "TYPE_TEXT"
+                op["op"] = "type"
+                trace.append(f"  -   {decision.get('ref')} {chosen.name} is empty; typing instead")
             if operation == "TYPE_TEXT":
                 element = observation.by_ref.get(decision["ref"])
-                op["text"] = policy.text_for(CONFIG, goal, element, observation, history)
+                try:
+                    op["text"] = policy.text_for(CONFIG, goal, element, observation, history)
+                except policy.TextDeclined as exc:
+                    if decision.get("ref"):
+                        declined_refs.add(decision["ref"])
+                        if element is not None:
+                            element.editable = False
+                    trace.append(f"  -   {exc}")
+                    continue
             if operation == "SELECT" and decision.get("value") is not None:
                 op["value"] = decision["value"]
             if operation == "SCROLL":
                 op["dir"] = "down"
+            before = observation.by_ref.get(decision["ref"]) if decision.get("ref") else None
             steps += 1
             payload = tab.act([op], stop_on_error=False, observe_after=True)
             step_result = payload["ops"][0]
@@ -613,15 +711,44 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
                 continue
             stale = 0
             browser_ms += step_result.get("ms") or 0
+            typed_note = ""
+            if isinstance(op.get("text"), str) and op["text"] and not (before and before.secret):
+                shown = op["text"] if len(op["text"]) <= 40 else op["text"][:39] + "…"
+                typed_note = f" “{shown}”"
             trace.append(
                 f"  {steps}. {operation} {decision.get('ref') or ''} "
-                f"{decision.get('target') or ''} → {'ok' if step_result['ok'] else error} "
+                f"{decision.get('target') or ''}{typed_note} → "
+                f"{'ok' if step_result['ok'] else error} "
                 f"({decision.get('latency_ms', 0)}ms model / {step_result.get('ms', 0)}ms browser)"
             )
+            if step_result["ok"]:
+                observation = tab.last or tab.observe()
+            after = (observation.by_ref.get(decision["ref"])
+                     if step_result["ok"] and decision.get("ref") else None)
+            typed = op.get("text")
+            memory.append(policy.remember_step(
+                op=op["op"], ref=decision.get("ref"), target=decision.get("target"),
+                ok=bool(step_result["ok"]),
+                text=typed if isinstance(typed, str) else None,
+                page_changed=payload.get("page_changed"),
+                value_before=None if before is None or before.secret else before.value,
+                value_after=None if after is None or after.secret else after.value,
+                secret=bool(before is not None and before.secret),
+                kind=before.kind if before is not None else "",
+            ))
             if not step_result["ok"]:
                 status = f"failed:{error}"
                 break
-            observation = tab.last or tab.observe()
+            # A click that opens a tab does not change the page it was clicked
+            # on, so the no-change streak below would call it stuck and the
+            # model would click it again. Follow first: the new tab is the
+            # page the goal is now about, and a page that changed is not a
+            # page that is stuck.
+            followed = tab.follow_new_tab(observation)
+            if followed:
+                trace.append(f"  ->  followed new tab {followed.get('url')}")
+                observation = _first_read(tab)
+                continue
             # `act` already counts how long the page has stood still; the loop
             # used to drop that count on the floor and keep paying one decision
             # request per step until `max_steps`. Measured on a real daily
@@ -636,6 +763,8 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
                 trace.append(f"  !   {payload['stuck']}")
                 status = "stopped: no progress"
                 break
+            if operation == "TYPE_TEXT" and before is not None and before.kind == "suggest":
+                observation = _await_suggestions(tab, observation)
         else:
             status = f"stopped: hit max_steps={max_steps}"
 

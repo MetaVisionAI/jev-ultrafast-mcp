@@ -131,6 +131,28 @@ def test_the_manager_rebuilds_a_socket_that_died(fresh_socket, monkeypatch, tmp_
     assert dead.closed is True, "the dead socket was left open"
 
 
+def test_asking_for_a_session_drops_one_bound_to_a_dead_socket(fresh_socket, monkeypatch, tmp_path) -> None:
+    """`browser_goal` asks for a session, and that path used to skip the check.
+
+    `manager.cdp` already rebuilt a dead socket. The tools never touch that
+    property when a session is cached, so the goal kept the dead one and the
+    next call failed the same way. Asking for the session is the call.
+    """
+    manager = _attach_manager(monkeypatch, tmp_path)
+    _profile_with_active_port(tmp_path)
+    dead = Socket(alive=False)
+    manager._cdp = dead
+    stale = object()
+    manager._sessions["default"] = stale
+    monkeypatch.setattr(browser_module.Session, "start", lambda self, url="about:blank": self)
+
+    session = manager.session("default")
+
+    assert session is not stale
+    assert session.cdp is fresh_socket
+    assert dead.closed is True
+
+
 def test_the_old_sessions_do_not_survive_the_socket(fresh_socket, monkeypatch, tmp_path) -> None:
     """A session holds target ids that only exist on the socket it came from."""
     manager = _attach_manager(monkeypatch, tmp_path)

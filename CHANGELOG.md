@@ -8,6 +8,25 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Feishu controls are recognized from the component vocabulary, not from a list of widgets.**
+  The calendar, messenger and event editor paint buttons, menus and day cells as plain `div`s
+  (`larkc-*`, `_trigger` / `_selection` / `_option`, a portal). The Feishu strategy now collects the
+  pointer boundary of those widgets and classifies them by that vocabulary: a `_selection` is a
+  combobox, an `_option` is an option, `larkc-checkbox` is a checkbox, a day cell or a
+  `data-start-time` header is a gridcell, and anything else the cursor calls clickable is a button.
+  Names fall back through tooltip text, `data-tip`, `data-icon`, an `icon-*` class and the semantic
+  words in the ancestor classes, which is what gives the four date fields "开始 日期" / "开始 时间" /
+  "结束 时间" / "结束 日期" instead of four identical textboxes. A day cell carries its panel's month
+  (and "非本月" when it is one); a header cell carries the `data-start-time` as a `YYYY-MM-DD` in
+  GMT+8. A portal that was not visible at the previous click is annotated with the control that
+  opened it. The strategy applies on `feishu.cn`, `feishu.net`, `larksuite.com` and `larkoffice.com`,
+  and `readState({strategy:"feishu"})` forces it for a fixture served from anywhere else.
+  `HELPER_VERSION` goes to 9.
+
+- **An `<input>` with no `type` is a textbox on every site.** HTML's default type is `text`. The
+  collector used to trust the attribute and drop the field, which is how Feishu's attendee and
+  location inputs never appeared. An unrecognised type is treated the same way.
+
 - **`browser_request_help`: hand one step to the person at the browser.** A login, a CAPTCHA, an
   SMS code, a consent or payment confirmation is a step a model must not take, and until now the
   only answer was a goal ending in `blocked` with nobody told. The new tool fronts the session's
@@ -253,6 +272,67 @@ All notable changes to this project are documented here. The format follows
   provider that did not issue it.
 
 ### Fixed
+
+- **A goal remembers what it typed and whether the page answered.** Each decision is a fresh
+  request. The only memory was the last ten steps as a verb, a ref and a name, so a title typed ten
+  times looked like ten unnamed clicks. The goal now sends the last twenty steps with the text, whether
+  the page changed, the field's value afterwards and the control's `kind`, plus `filled`, the current
+  value of every editable field that holds one. Two steps the page did not answer, or two steps that
+  left an editable value standing still, withdraw that target even when another ref sits between
+  them. Opening a `picker` leaves its value where it was on purpose and is not counted.
+
+- **A menu row scrolled out of its list stays choosable.** The hit test found the page behind the
+  list, so the row was marked covered and `14:00` was never offered while `14:00 (2.5小时)` was.
+  Clipping by a scroll container is no longer a cover; a dialog still is. A portal row the hit test
+  still calls covered is offered, and the click scrolls it into view first.
+
+- **Elements carry `kind`: what the control is for.** `suggest` (typing opens a list to pick from),
+  `picker` (a click opens a menu that sets the value), `submit`, `create`. The Feishu strategy reads
+  it from the component vocabulary: a `_selection` with `with-input-search` is `suggest`, any other
+  `_selection` is a `picker`, `larkc-btn-primary` submits, `icon-add` creates. Elsewhere it comes
+  from HTML: `aria-autocomplete`, `list`, date and time inputs, a form's submit button. The goal
+  loop keys on `kind` and never on a label. `HELPER_VERSION` goes to 11.
+
+- **Text typed into a `suggest` field is followed by its row.** After the type, the loop waits up to
+  two seconds for a new `option` to appear, because search results arrive after the keystrokes and
+  the snapshot taken with them shows only the field. A click on that field, or on the `submit`
+  control, while an `option` starting with the typed text is open selects the row instead; a row
+  the observer attributes to the field (`↳ eN`) wins. A click on an empty `suggest` field is
+  carried out as typing. Only `option` rows count, so a button that echoes the text is left alone.
+
+- **A create button is retired once its form was submitted.** One booking became five events
+  because the model returned to the list and clicked `icon-add` again. After a successful
+  `create` then `submit` in the same goal, every `create` control is marked unusable.
+
+- **An unnamed button is offered only when nothing named is clickable.** On a calendar card the
+  unnamed icons were transfer and delete.
+
+- **One malformed decision is asked again.** A contract violation from the route raises
+  `MalformedAnswer` and gets one retry, counted in the decision total. An outage or a refused key
+  still stops the goal.
+
+- **`browser_goal` follows a tab the page it is driving just opened.** A click with `target=_blank`
+  (Feishu's calendar entry is one: it leaves through `security.feishu.cn/link/safety` and the week
+  view arrives in a new tab) does not change the page it was clicked on. The goal could see the new
+  tab — `observe` already reported `NEW TAB opened` — but the decision model has no switch operation,
+  so it read "nothing happened" and clicked the same control again. Each click opened another copy,
+  until the no-change streak called the run stuck. The goal now switches to a new tab whose opener is
+  the page it is on (the latest, when that page opened several), waits out the interstitial, and keeps
+  driving there. The page it leaves stays open. A tab the user opened, or another session opened, has
+  a different opener and is not followed. `browser_act` still only reports the new tab; the switch
+  stays the caller's, through `browser_tabs`.
+
+- **A tab a click just opened is not handed over while it is still `about:blank`.** `window.open` reports the tab before the address exists, and that blank document loads instantly, so the goal followed it, read an empty page, and answered BLOCKED one navigation away from the calendar. The follow now waits, within the settle budget, until the tab has an address. A BLOCKED answer on a page that is still `about:blank` is re-read once.
+
+- **A text helper that declines one field no longer ends the goal.** `{"text": null}` means the goal names no value for that field. It used to raise out of the loop, so a search box on the way to the form aborted the booking and the trace of the steps already taken was discarded. The field stays clickable and stops being offered for typing; the goal continues. A malformed answer still stops the run.
+
+- **A crowd of identical grid cells no longer spends the choice budget, and clicking an editable field no longer ends the goal.** The event editor paints the day's hours as dozens of cells that all answer to "时间". They sorted with the menu that just opened, so the cut dropped the option the goal had asked for and the model kept clicking the time field. Names shared by more than eight grid cells are now reduced to four before that cut. A click on an editable textbox focuses it and changes nothing else; counting those toward the no-change streak stopped the run on the third click, one step before the text was entered. That click no longer advances the streak. The decision rules say an editable textbox is filled with `TYPE_TEXT`.
+
+- **Asking for a session drops one bound to a dead socket.** `BrowserManager.cdp` already
+  rebuilt a socket that had died and threw away the sessions that held its target ids. The tools
+  never touch that property when a session is cached: `session()` returned the old object, and the
+  next `browser_goal` failed with `Page.navigate: transport closed` on the same dead socket the
+  doctor had just called dropped. Asking for the session now goes through that check first.
 
 - **`toggle` clicks, and the confirmation rail was attached to the op named `click`.** `_do_click` has
   exactly two callers and only one of them consulted `confirm_reason`, so

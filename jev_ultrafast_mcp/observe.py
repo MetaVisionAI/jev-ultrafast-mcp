@@ -58,6 +58,10 @@ class Element:
     # submit. `policy` leaves these out of the operations it offers, so seeing
     # one costs nothing but tells the model what the page is waiting for.
     disabled: bool = False
+    # What the control is for, when the page says so: `suggest` (typing opens a
+    # list to pick from), `picker` (a click opens a menu that sets the value),
+    # `submit`, `create`. The goal loop keys on this, never on a label.
+    kind: str = ""
 
     @property
     def code(self) -> str:
@@ -84,6 +88,7 @@ class Element:
             label=_short(raw.get("label") or "", 160),
             hoverable=bool(raw.get("hoverable")),
             disabled=bool(raw.get("disabled")),
+            kind=raw.get("kind") or "",
             # The observer reports this as `inViewport`. Dropping it left `in_viewport`
             # permanently True, so the `»` flag never rendered even though the header
             # advertises it and counts the same elements in `offscreen`.
@@ -187,8 +192,9 @@ class Observation:
     cross_frames: int
     cross_frame_srcs: list[str]
     offscreen: int = 0
-    # Which site strategy collected extra controls, or "" when the page used the
-    # generic selector only. Rendered in the header so a missing row is obvious.
+    # Which site strategy collected the non-native controls, or "" when the
+    # generic selector was enough. Empty on every page that is not one of those
+    # hosts, so the header stays as it was.
     strategy: str = ""
     sequence: int = 0
     new_tabs: list[dict] = field(default_factory=list)
@@ -262,6 +268,8 @@ class Observation:
             header += f"  (omitted {self.omitted} low-priority)"
         if self.offscreen:
             header += f"  (offscreen {self.offscreen}, \u00bb = will scroll on act)"
+        if self.strategy:
+            header += f"  strategy={self.strategy}"
         triggers = sum(
             1 for element in self.elements
             if element.hoverable and element.expanded != "true"

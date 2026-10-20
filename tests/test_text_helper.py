@@ -74,6 +74,25 @@ def test_a_rejected_answer_is_reported_back(monkeypatch, content):
     assert content[:60] in message, "the error must carry the answer, not just the verdict"
 
 
+def test_a_null_answer_declines_the_field_instead_of_stopping_the_run(monkeypatch):
+    """`{"text": null}` means the goal names no value for this field.
+
+    A malformed answer still stops the run. A decline does not: the goal has
+    other ways to proceed, and the message has to name the field so the next
+    decision can leave it alone.
+    """
+    cfg, element, observation = _fixtures()
+    monkeypatch.setattr(policy, "_post", lambda url, key, body: _answer('{"text": null}'))
+
+    with pytest.raises(policy.TextDeclined) as caught:
+        policy.text_for(cfg, "open the Python article", element, observation, [])
+
+    message = str(caught.value)
+    assert "e1" in message
+    assert "Search Wikipedia" in message
+    assert isinstance(caught.value, policy.TurboUnavailable)
+
+
 def test_a_well_formed_answer_is_used_verbatim(monkeypatch):
     cfg, element, observation = _fixtures()
     monkeypatch.setattr(policy, "_post", lambda url, key, body: _answer('{"text": "Python"}'))

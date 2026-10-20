@@ -270,6 +270,7 @@ export function observationLines(observation, {
   if (observation.offscreen) {
     header += `  (offscreen ${observation.offscreen}, ${FLAG_OFFSCREEN} = will scroll on act)`;
   }
+  if (observation.strategy) header += `  strategy=${observation.strategy}`;
   const triggers = observation.elements.filter(
     element => element.hoverable && element.expanded !== 'true',
   ).length;
