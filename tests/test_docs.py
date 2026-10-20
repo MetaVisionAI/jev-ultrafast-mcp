@@ -243,6 +243,13 @@ def test_the_readmes_name_the_provider_and_do_not_oversell_one_key():
             f"{path.name} still claims one key covers both models unconditionally")
 
 
+def test_the_readmes_document_the_perplexity_route():
+    for path in (README, README_ZH):
+        text = path.read_text(encoding="utf-8")
+        assert "PERPLEXITY_API_KEY" in text, f"{path.name} never names Perplexity's key"
+        assert "pplx-decider-latest" in text, f"{path.name} never names Perplexity's default model"
+
+
 def test_the_readmes_promise_attach_mode_leaves_the_users_browser_alone():
     """The one claim in here that, if wrong, costs a user every tab they had open.
 

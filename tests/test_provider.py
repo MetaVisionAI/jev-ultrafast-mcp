@@ -21,6 +21,8 @@ PROVIDER_VARS = (
     "TYPESAFE_BASE_URL",
     "TYPESAFE_API_KEY",
     "OPENROUTER_API_KEY",
+    "PERPLEXITY_API_KEY",
+    "TYPESAFE_MODEL",
     "TEXT_MODEL_API_KEY",
     "TEXT_MODEL_BASE_URL",
     "TEXT_MODEL",
@@ -139,3 +141,69 @@ def test_a_recognised_provider_raises_no_note(monkeypatch):
     monkeypatch.setenv("JEV_PROVIDER", "openrouter")
 
     assert config_mod.provider_note() is None
+
+
+def test_perplexity_is_a_third_route_with_its_own_model(monkeypatch):
+    monkeypatch.setenv("JEV_PROVIDER", "perplexity")
+    monkeypatch.setenv("PERPLEXITY_API_KEY", "pplx-key")
+
+    cfg = Config.from_env()
+
+    assert cfg.provider == "perplexity"
+    assert cfg.typesafe_endpoint == "https://api.perplexity.ai/v1/decisions"
+    assert cfg.typesafe_key == "pplx-key"
+    assert cfg.typesafe_model == "pplx-decider-latest", "the default model follows the provider"
+    assert cfg.wire == "decisions"
+
+
+def test_the_jev_routes_keep_their_model_and_wire(monkeypatch):
+    monkeypatch.setenv("JEV_PROVIDER", "openrouter")
+
+    cfg = Config.from_env()
+
+    assert cfg.typesafe_model == "jev-latest"
+    assert cfg.wire == "systemone"
+
+
+def test_a_perplexity_url_selects_perplexity(monkeypatch):
+    monkeypatch.setenv("TYPESAFE_BASE_URL", "https://api.perplexity.ai/v1/decisions")
+    monkeypatch.setenv("PERPLEXITY_API_KEY", "pplx-key")
+
+    cfg = Config.from_env()
+
+    assert cfg.provider == "perplexity"
+    assert cfg.typesafe_key == "pplx-key"
+
+
+def test_typesafe_model_still_overrides_the_default(monkeypatch):
+    monkeypatch.setenv("JEV_PROVIDER", "perplexity")
+    monkeypatch.setenv("TYPESAFE_MODEL", "pplx-decider-flash-latest")
+
+    assert Config.from_env().typesafe_model == "pplx-decider-flash-latest"
+
+
+def test_perplexity_does_not_borrow_the_typesafe_key(monkeypatch):
+    monkeypatch.setenv("JEV_PROVIDER", "perplexity")
+    monkeypatch.setenv("TYPESAFE_API_KEY", "ts-key")
+
+    cfg = Config.from_env()
+
+    assert cfg.typesafe_key is None
+    with pytest.raises(policy.TurboUnavailable) as caught:
+        policy.choose(cfg, None, "goal", [])
+    assert "PERPLEXITY_API_KEY" in str(caught.value)
+
+
+def test_the_text_helper_does_not_inherit_from_perplexity(monkeypatch):
+    """pplx-decider writes no prose, so its key must not be lent to a chat endpoint."""
+    monkeypatch.setenv("JEV_PROVIDER", "perplexity")
+    monkeypatch.setenv("PERPLEXITY_API_KEY", "pplx-key")
+    monkeypatch.setenv("TEXT_MODEL", "sonar")
+
+    cfg = Config.from_env()
+
+    assert cfg.text_model_key is None
+    with pytest.raises(policy.TurboUnavailable) as caught:
+        policy.text_for(cfg, "goal", None, None, [])
+    message = str(caught.value)
+    assert "pplx-decider" in message and "TEXT_MODEL_API_KEY" in message
