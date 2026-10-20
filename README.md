@@ -610,8 +610,9 @@ refusing weak or ambiguous matches rather than clicking the wrong thing. `params
 Hands the whole task over. Pass `url` and the goal and the page is opened and driven to the end
 server-side using TypeSafe speculative fan-out (one request per step) — one call, one turn. Leave
 `url` out to carry on from the page the session is already showing. Needs a key for the decision
-model: `TYPESAFE_API_KEY` for Jev's own API, or `OPENROUTER_API_KEY` with `JEV_PROVIDER=openrouter`
-(equivalently, `TYPESAFE_BASE_URL` pointed at OpenRouter's decisions route). Returns
+model: `TYPESAFE_API_KEY` for Jev's own API, `OPENROUTER_API_KEY` with `JEV_PROVIDER=openrouter`
+(equivalently, `TYPESAFE_BASE_URL` pointed at OpenRouter's decisions route), or `PERPLEXITY_API_KEY`
+with `JEV_PROVIDER=perplexity` for Perplexity's `pplx-decider`. Returns
 `verified: PASS/FAIL` when `verify` checks are supplied.
 
 Reading a page is not a task: `browser_open`, `browser_observe` and `browser_assert` are direct,
@@ -690,11 +691,12 @@ All optional; the defaults are the point.
 | No | `JEVMCP_SETTLE_TIMEOUT` | `4.0` | after opening a URL, how long to wait for the page to stop fetching and its element table to stop changing |
 | No | `JEVMCP_SETTLE_POLL_MS` | `120` | how often to re-read while waiting |
 | No | `JEVMCP_STATE_DIR` | `~/.jev-ultrafast-mcp` | profile, macros and screenshots |
-| No | `JEV_PROVIDER` | `typesafe` | which API pays for the decision model: `typesafe` (Jev's own) or `openrouter` |
+| No | `JEV_PROVIDER` | `typesafe` | which API pays for the decision model: `typesafe` (Jev's own), `openrouter` or `perplexity` |
 | No | `TYPESAFE_API_KEY` | — | key for Jev's own API |
 | No | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai/v1/systemone` | where the decision model lives; a custom endpoint, and what the provider is inferred from when `JEV_PROVIDER` is unset |
 | No | `OPENROUTER_API_KEY` | — | key for OpenRouter's decisions route, when `JEV_PROVIDER=openrouter` |
-| No | `TYPESAFE_MODEL` | `jev-latest` | decision-model slug |
+| No | `PERPLEXITY_API_KEY` | — | key for Perplexity's Decisions API, when `JEV_PROVIDER=perplexity` |
+| No | `TYPESAFE_MODEL` | per provider | decision-model slug; `jev-latest` for `typesafe` and `openrouter`, `pplx-decider-latest` for `perplexity` |
 | No | `TEXT_MODEL_API_KEY` | — | optional; only for the small text helper `browser_goal` uses to type a value into a field. Unset, the helper inherits the decision model's provider |
 | No | `TEXT_MODEL_BASE_URL` | `https://api.deepseek.com/v1` | endpoint for that helper; setting it *or* `TEXT_MODEL_API_KEY` is what opts out of inheriting the decision model's provider |
 | No | `TEXT_MODEL` | `deepseek-chat` | model for that helper; required when the helper inherits a provider, since `deepseek-chat` is not an OpenRouter slug |
@@ -706,19 +708,25 @@ falls back to `DevToolsActivePort` rather than treating that as "nothing is list
 only ever touches the tab it opens: `browser_close` detaches rather than quitting, and the same holds
 when the server exits. Your other windows, and the session in them, are never closed.
 
-Everything above the last eight rows is local: it configures a browser on your machine. Only the
+Everything above the last nine rows is local: it configures a browser on your machine. Only the
 decision-model group talks to the network, and only when `browser_goal` actually runs.
 
-The decision model has two routes and `JEV_PROVIDER` names which one you are on. `typesafe` is Jev's
+The decision model has three routes and `JEV_PROVIDER` names which one you are on. `typesafe` is Jev's
 own API. `openrouter` is the same model through OpenRouter's decisions route, needs no TypeSafe
 account, and is the route that predates the variable: `TYPESAFE_BASE_URL` still overrides the URL
 either way, and is what the provider is inferred from when `JEV_PROVIDER` is unset, so a
-configuration written before the name existed keeps working unchanged.
+configuration written before the name existed keeps working unchanged. `perplexity` is a different
+model, `pplx-decider-latest`, behind Perplexity's Decisions API (`https://api.perplexity.ai/v1/decisions`).
+It takes the same typed questions; jev flattens step instructions and option descriptions to the
+plain strings that API requires, so nothing else changes. `pplx-decider-flash-latest` also exists
+but is not recommended here: it answers each question on its own and bills the page state once per
+question, and a browser step asks one question per operation.
 
 Only the OpenRouter route also serves a chat API, so only there can the text helper inherit. Set
 `JEV_PROVIDER=openrouter` and name a chat model with `TEXT_MODEL`, and one `OPENROUTER_API_KEY`
-covers both. Jev's own API answers typed questions and never writes prose, so `TYPE_TEXT` under it
-needs a chat provider of its own through `TEXT_MODEL_API_KEY`. Either way the key and the URL are
+covers both. Jev's own API and `pplx-decider` answer typed questions and never write prose, so
+`TYPE_TEXT` under either needs a chat provider of its own through `TEXT_MODEL_API_KEY` — the
+Perplexity key is not lent to the helper. Either way the key and the URL are
 always taken from the same provider — a key borrowed across providers buys a 401 that names the
 company you did not call, and a run diagnosed from the wrong provider's error is a run nobody
 diagnoses.

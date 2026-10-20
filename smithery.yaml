@@ -28,6 +28,11 @@ startCommand:
         description: >-
           Alternative decision-model key. Setting this selects the OpenRouter provider, which also
           needs TEXT_MODEL set to an OpenRouter slug.
+      perplexityApiKey:
+        type: string
+        description: >-
+          Alternative decision model: Perplexity's pplx-decider. Setting this selects the
+          perplexity provider. Typing into fields still needs a separate TEXT_MODEL_API_KEY.
   commandFunction: |-
     (config) => {
       const env = {};
@@ -35,6 +40,10 @@ startCommand:
       if (config.openrouterApiKey) {
         env.OPENROUTER_API_KEY = config.openrouterApiKey;
         env.JEV_PROVIDER = 'openrouter';
+      }
+      if (config.perplexityApiKey) {
+        env.PERPLEXITY_API_KEY = config.perplexityApiKey;
+        env.JEV_PROVIDER = 'perplexity';
       }
       return { command: 'uvx', args: ['jev-ultrafast-mcp'], env };
     }

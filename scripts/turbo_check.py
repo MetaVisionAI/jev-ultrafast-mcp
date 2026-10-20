@@ -85,7 +85,8 @@ def main() -> int:
     if not policy.available(cfg):
         print("skipped: no decision-model key.")
         print("  set TYPESAFE_API_KEY, or JEV_PROVIDER=openrouter with OPENROUTER_API_KEY")
-        print("  (equivalently, TYPESAFE_BASE_URL=https://openrouter.ai/api/alpha/decisions)")
+        print("  (equivalently, TYPESAFE_BASE_URL=https://openrouter.ai/api/alpha/decisions),")
+        print("  or JEV_PROVIDER=perplexity with PERPLEXITY_API_KEY")
         return 0
 
     # Imported here, not at the top: the server reads its configuration once, at

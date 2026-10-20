@@ -2,11 +2,13 @@
 
 No key is needed for the browser path: open, observe, act, assert and macro all
 run against a local Chrome and never call out. A decision model is opt-in, and it
-is reachable through two APIs that are both supported here:
+is reachable through three APIs that are all supported here:
 
     JEV_PROVIDER=typesafe     Jev's own API, paid for with TYPESAFE_API_KEY (the default)
     JEV_PROVIDER=openrouter   the same model through OpenRouter, paid for with
                               OPENROUTER_API_KEY and no TypeSafe account
+    JEV_PROVIDER=perplexity   Perplexity's pplx-decider through its Decisions API,
+                              paid for with PERPLEXITY_API_KEY
 
 `TYPESAFE_BASE_URL` still overrides the decisions URL for either, and is what the
 provider is inferred from when `JEV_PROVIDER` is unset, so every existing
@@ -113,6 +115,7 @@ def _env_list(name: str) -> list[str]:
 
 TYPESAFE_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 OPENROUTER_ENDPOINT = "https://openrouter.ai/api/alpha/decisions"
+PERPLEXITY_ENDPOINT = "https://api.perplexity.ai/v1/decisions"
 
 DEFAULT_PROVIDER = "typesafe"
 DEFAULT_TEXT_BASE = "https://api.deepseek.com/v1"
@@ -130,11 +133,18 @@ DEFAULT_TEXT_MODEL = "deepseek-chat"
 # table is what keeps it a fact about the provider instead of a claim in a docstring: giving
 # Jev a chat route later is one line here, and until then the helper refuses by name and says
 # which provider cannot serve it.
+#
+# Two more facts let a provider that is not Jev share the table: `model` is the slug sent when
+# TYPESAFE_MODEL is unset, and `wire` is the request dialect. `systemone` is TypeSafe's contract,
+# where a choice option and an instruction may be any JSON. `decisions` is Perplexity's: the same
+# envelope, but option descriptions are strings or null, so `policy` flattens them before posting.
 PROVIDERS: dict[str, dict] = {
     "typesafe": {
         "endpoint": TYPESAFE_ENDPOINT,
         "key_vars": ("TYPESAFE_API_KEY",),
         "chat_base": None,
+        "model": "jev-latest",
+        "wire": "systemone",
     },
     "openrouter": {
         "endpoint": OPENROUTER_ENDPOINT,
@@ -146,6 +156,19 @@ PROVIDERS: dict[str, dict] = {
         # one thing the table exists to keep straight.
         "key_vars": ("OPENROUTER_API_KEY",),
         "chat_base": "https://openrouter.ai/api/v1",
+        "model": "jev-latest",
+        "wire": "systemone",
+    },
+    "perplexity": {
+        "endpoint": PERPLEXITY_ENDPOINT,
+        "key_vars": ("PERPLEXITY_API_KEY",),
+        # Perplexity serves chat, but whether it honours the `json_object` response format the
+        # text helper relies on is unverified, so the helper is not allowed to inherit it.
+        "chat_base": None,
+        # The 27B model. Flash answers every question in its own pass and bills the page once
+        # per question, and a step here asks five to eight.
+        "model": "pplx-decider-latest",
+        "wire": "decisions",
     },
 }
 
@@ -170,8 +193,11 @@ def resolve_provider() -> str:
     explicit = _env("JEV_PROVIDER").lower()
     if explicit in PROVIDERS:
         return explicit
-    if "openrouter.ai" in _env("TYPESAFE_BASE_URL"):
+    url = _env("TYPESAFE_BASE_URL")
+    if "openrouter.ai" in url:
         return "openrouter"
+    if "perplexity.ai" in url:
+        return "perplexity"
     return DEFAULT_PROVIDER
 
 
@@ -336,14 +362,15 @@ class Config:
     secret_patterns: list[str] = field(default_factory=lambda: list(DEFAULT_SECRET_PATTERNS))
     typesafe_key: str | None = None
     typesafe_model: str = "jev-latest"
-    # Which API pays for the decision model: "typesafe" (Jev's own) or "openrouter".
-    # Named by JEV_PROVIDER, or inferred from TYPESAFE_BASE_URL. See PROVIDERS.
+    # Which API pays for the decision model: "typesafe" (Jev's own), "openrouter" or
+    # "perplexity". Named by JEV_PROVIDER, or inferred from TYPESAFE_BASE_URL. See PROVIDERS.
     provider: str = DEFAULT_PROVIDER
-    # Where the decision model lives. Same wire contract at every route, so the
-    # only thing that changes is the URL and whose credits pay for it.
+    # Where the decision model lives. One envelope at every route; Perplexity only
+    # differs in wanting option descriptions as strings (PROVIDERS[...]["wire"]).
     #   TypeSafe direct : https://api.typesafe.ai/v1/systemone   (TYPESAFE_API_KEY)
     #   OpenRouter      : https://openrouter.ai/api/alpha/decisions (OPENROUTER key;
     #                     note the path is outside /api/v1)
+    #   Perplexity      : https://api.perplexity.ai/v1/decisions  (PERPLEXITY_API_KEY)
     typesafe_endpoint: str = TYPESAFE_ENDPOINT
     # The text helper. An explicit TEXT_MODEL_* configuration wins; otherwise both halves
     # are inherited from `provider` together, so key and base URL never disagree.
@@ -392,7 +419,7 @@ class Config:
             request_help=_env_bool("JEVMCP_REQUEST_HELP", True),
             confirm_patterns=_env_list("JEVMCP_CONFIRM_PATTERNS") or list(DEFAULT_DENY_PATTERNS),
             typesafe_key=turbo_key,
-            typesafe_model=os.environ.get("TYPESAFE_MODEL", "jev-latest"),
+            typesafe_model=_env("TYPESAFE_MODEL") or PROVIDERS[provider].get("model", "jev-latest"),
             provider=provider,
             typesafe_endpoint=turbo_endpoint,
             text_model_key=text_key,
@@ -422,3 +449,7 @@ class Config:
     @property
     def turbo_ready(self) -> bool:
         return bool(self.typesafe_key)
+
+    @property
+    def wire(self) -> str:
+        return PROVIDERS.get(self.provider, {}).get("wire", "systemone")

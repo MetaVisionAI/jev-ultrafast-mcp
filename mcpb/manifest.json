@@ -37,7 +37,9 @@
       "args": ["run", "--directory", "${__dirname}", "jev-ultrafast-mcp"],
       "env": {
         "TYPESAFE_API_KEY": "${user_config.typesafe_api_key}",
-        "OPENROUTER_API_KEY": "${user_config.openrouter_api_key}"
+        "OPENROUTER_API_KEY": "${user_config.openrouter_api_key}",
+        "PERPLEXITY_API_KEY": "${user_config.perplexity_api_key}",
+        "JEV_PROVIDER": "${user_config.decision_provider}"
       }
     }
   },
@@ -110,6 +112,19 @@
       "title": "Decision-model key (OpenRouter)",
       "description": "Alternative to the above. Setting this selects the OpenRouter provider, which also needs TEXT_MODEL set to an OpenRouter slug such as deepseek/deepseek-chat.",
       "sensitive": true,
+      "required": false
+    },
+    "perplexity_api_key": {
+      "type": "string",
+      "title": "Decision-model key (Perplexity pplx-decider)",
+      "description": "Alternative decision model. Used when the decision provider below is set to perplexity; typing into fields still needs a separate TEXT_MODEL_API_KEY.",
+      "sensitive": true,
+      "required": false
+    },
+    "decision_provider": {
+      "type": "string",
+      "title": "Decision provider",
+      "description": "typesafe, openrouter or perplexity. Leave blank for Jev's own API.",
       "required": false
     }
   }
