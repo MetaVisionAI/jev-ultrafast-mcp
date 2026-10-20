@@ -182,6 +182,7 @@ def _first_read(tab) -> Observation:
     # can only follow a tab that is still on the observation it is handed.
     opened = list(observation.new_tabs)
     opened_ids = {tab_info.get("target_id") for tab_info in opened}
+
     deadline = time.monotonic() + CONFIG.settle_timeout
     while time.monotonic() < deadline:
         time.sleep(CONFIG.settle_poll_ms / 1000.0)
@@ -242,6 +243,7 @@ def _tokens(usage: object) -> int:
         value = usage.get(key)
         if isinstance(value, int) and not isinstance(value, bool):
             return value
+
     total = 0
     for key in ("prompt_tokens", "input_tokens", "completion_tokens", "output_tokens"):
         value = usage.get(key)
@@ -266,6 +268,7 @@ def _render_act(payload: dict, verbose: bool = False) -> str:
             lines.append(f"  + {label}  {op.get('ms', 0)}ms{detail}")
         else:
             lines.append(f"  x {label}  {op.get('error')}: {op.get('detail', '')}")
+
     if payload.get("stuck"):
         lines.append(f"! {payload['stuck']}")
     if payload.get("view"):
@@ -402,11 +405,13 @@ def browser_click_at(x: float, y: float, session: str = "default",
         py = _viewport_fraction(y, "y")
     except ValueError as exc:
         return f"invalid_request: {exc}"
+
     if label:
         reason = confirm_reason(CONFIG, label, "button")
         if reason and not confirm:
             return (f"needs_confirmation: {reason}; re-send with confirm=true "
                     "to proceed. Nothing was clicked.")
+
     try:
         tab = _session(session)
         width, height = tab._viewport_size()
@@ -495,15 +500,18 @@ def browser_macro(action: str, session: str = "default", name: str = "",
             return json.dumps(macros_mod.load(CONFIG, name), indent=2, ensure_ascii=False)
         if action == "delete":
             return f"deleted {name!r}" if macros_mod.delete(CONFIG, name) else f"no macro {name!r}"
+
         if action == "run":
             data = macros_mod.load(CONFIG, name)
             start = start_url or data.get("start_url")
             if start:
                 tab.navigate(start)
             observation = tab.observe()
+
             ops, report = macros_mod.resolve(data.get("steps", []), observation,
                                              params or {}, threshold=threshold)
             payload = tab.act(ops, stop_on_error=True, observe_after=True)
+
             header = f"replayed {name!r}: resolved {len(ops)} steps from {len(data.get('steps', []))}\n" + \
                      "\n".join(
                          f"  step {item['step']} {item['op']}"
@@ -568,6 +576,7 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
                 "Set TYPESAFE_API_KEY for Jev's own API, or OPENROUTER_API_KEY with "
                 "JEV_PROVIDER=openrouter.\n"
                 "Until then, drive the loop yourself: browser_observe → pick a ref → browser_act.")
+
     try:
         tab = _session(session)
         # The stall count belongs to a run, not to the session: a goal that
@@ -576,6 +585,7 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
         started = time.perf_counter()
         if url:
             tab.navigate(url)
+
         # Captured before the first read, which replaces `last`. A tab the
         # previous tool already reported is no longer "new" to that read, but
         # it is still the page this goal should be driving.
@@ -591,6 +601,7 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
         if followed:
             trace.append(f"  ->  followed new tab {followed.get('url')}")
             observation = _first_read(tab)
+
         status = "running"
         steps = 0
         # A helper that answers {"text": null} is declining one field. Typing a
@@ -612,6 +623,7 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
         model_ms = 0     # time spent waiting on the decision model
         browser_ms = 0   # time spent waiting on the page
         tokens = 0
+
         while steps < max_steps:
             history = memory[-20:]
             policy.retire_create(observation, memory)
@@ -619,6 +631,7 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
                 declined = observation.by_ref.get(ref)
                 if declined is not None:
                     declined.editable = False
+
             try:
                 decision = policy.choose(CONFIG, observation, goal, history)
             except policy.TurboUnavailable as exc:
@@ -636,11 +649,13 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
                 status = f"turbo_unavailable: {exc}"
                 trace.append(f"  !   step {steps + 1}: {exc}")
                 break
+
             calls += 1
             model_ms += decision.get("latency_ms") or 0
             tokens += _tokens(decision.get("usage"))
             operation = decision["operation"]
             suggestion = policy.pending_suggestion(observation, memory)
+
             if operation == "DONE" and suggestion is not None:
                 # A name left in the box with its row still open is not an
                 # invitee; finishing now drops that person from the form.
@@ -667,6 +682,7 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
                 status = operation.lower()
                 trace.append(f"  {steps + 1}. {operation} (conf {decision.get('confidence', 0):.2f})")
                 break
+
             op: dict = {"op": policy.OPERATION_TO_ACT[operation]}
             if decision.get("ref"):
                 op["ref"] = decision["ref"]
@@ -695,6 +711,7 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
                 operation = "TYPE_TEXT"
                 op["op"] = "type"
                 trace.append(f"  -   {decision.get('ref')} {chosen.name} is empty; typing instead")
+
             if operation == "TYPE_TEXT":
                 element = observation.by_ref.get(decision["ref"])
                 try:
@@ -712,6 +729,7 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
                 op["dir"] = "down"
             if chosen is not None and chosen.kind:
                 op["kind"] = chosen.kind
+
             before = observation.by_ref.get(decision["ref"]) if decision.get("ref") else None
             steps += 1
             payload = tab.act([op], stop_on_error=False, observe_after=True)
@@ -729,6 +747,7 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
                              f"{stale}/{STALE_REF_RETRIES})")
                 observation = tab.observe()
                 continue
+
             ref = decision.get("ref") or ""
             if (error in RE_READ_REASONS and ref not in reread_refs and recovered < max_steps):
                 reread_refs.add(ref)
@@ -737,6 +756,7 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
                 trace.append(f"  -   re-observing ({error})")
                 observation = tab.observe()
                 continue
+
             stale = 0
             browser_ms += step_result.get("ms") or 0
             typed_note = ""
@@ -768,6 +788,7 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
             if not step_result["ok"]:
                 status = f"failed:{error}"
                 break
+
             # A click that opens a tab does not change the page it was clicked
             # on, so the no-change streak below would call it stuck and the
             # model would click it again. Follow first: the new tab is the
@@ -778,6 +799,7 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
                 trace.append(f"  ->  followed new tab {followed.get('url')}")
                 observation = _first_read(tab)
                 continue
+
             # `act` already counts how long the page has stood still; the loop
             # used to drop that count on the floor and keep paying one decision
             # request per step until `max_steps`. Measured on a real daily
@@ -792,6 +814,7 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
                 trace.append(f"  !   {payload['stuck']}")
                 status = "stopped: no progress"
                 break
+
             if operation == "TYPE_TEXT" and before is not None and before.kind == "suggest":
                 observation = _await_suggestions(tab, observation)
         else:
@@ -890,6 +913,7 @@ def browser_request_help(prompt: str, session: str = "default", title: str = "",
         return f"invalid_params: {exc}"
     except (ChromeLaunchError, CdpError, PageStale) as exc:
         return _error(exc)
+
     outcome = result["outcome"]
     if outcome == "disabled":
         return f"help disabled: {result['reason']}\n{HELP_NEXT['disabled']}"
@@ -902,6 +926,7 @@ def browser_request_help(prompt: str, session: str = "default", title: str = "",
                      + (f"; unresolved: {', '.join(result['unresolved_targets'])}"
                         if result["unresolved_targets"] else ""))
     lines.append(HELP_NEXT[outcome])
+
     try:
         observation = tab.observe(full=True)
     except (CdpError, PageStale) as exc:
@@ -993,6 +1018,7 @@ def browser_doctor() -> str:
             "model": CONFIG.text_model,
         },
     }
+
     report["hints"] = []
     unknown_provider = provider_note()
     if unknown_provider:
@@ -1016,8 +1042,10 @@ def browser_doctor() -> str:
             )
         else:
             report["hints"].append("Browser is not started yet; it launches on the first browser_open.")
+
     if report.get("chrome_error"):
         report["hints"].append("Set JEVMCP_CHROME to your Chrome/Chromium executable.")
+
     # A guard that is on has to say so. The envelope is opt-in and off by
     # default, so anyone who meets it has almost always inherited it from an
     # earlier task rather than chosen it — and a site that will not open is
