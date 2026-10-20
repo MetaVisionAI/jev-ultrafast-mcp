@@ -8,6 +8,17 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Perplexity's `pplx-decider` as a third decision backend.** `JEV_PROVIDER=perplexity` with
+  `PERPLEXITY_API_KEY` sends `browser_goal`'s per-step questions to
+  `https://api.perplexity.ai/v1/decisions` with `pplx-decider-latest` (a `perplexity.ai`
+  `TYPESAFE_BASE_URL` selects it too). `TYPESAFE_MODEL` now defaults per provider. That API accepts
+  only strings for instructions and option descriptions, so on this route they are flattened to text;
+  option keys, and therefore the refs the answer selects, are unchanged. A 400 now reports the
+  provider's `error.message`, a 429's `Retry-After` is honoured (capped at 10 s), and missing-key and
+  401 messages name the selected provider's variable. The text helper does not inherit from
+  Perplexity, and `pplx-decider-flash-latest` is not recommended: it answers each question
+  separately and bills the page state once per question. The mcpb bundle gains
+  `perplexity_api_key` and `decision_provider`; Smithery gains `perplexityApiKey`.
 - **Feishu controls are recognized from the component vocabulary, not from a list of widgets.**
   The calendar, messenger and event editor paint buttons, menus and day cells as plain `div`s
   (`larkc-*`, `_trigger` / `_selection` / `_option`, a portal). The Feishu strategy now collects the

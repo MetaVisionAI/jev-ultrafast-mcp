@@ -213,7 +213,7 @@ not a reason to quit a browser it never started.
 | `browser_act` | Batch of ops (`click` `type` `select` `toggle` `hover` `upload` `keys` `scroll` `nav` `back` `wait` `wait_for_ref` `wait_for_text` `screenshot` `tab` `eval`) then a delta. `keys` presses keys — a bare single character is text and is refused on a sensitive field |
 | `browser_assert` | Deterministic checks → `pass` / `fail` |
 | `browser_macro` | `record_start` · `record_stop` · `run` · `list` · `inspect` · `delete` |
-| `browser_goal` | Hand the whole goal over: run the loop server-side through Jev — TypeSafe's own API, or OpenRouter's decisions route under `JEV_PROVIDER=openrouter` (needs that provider's key) |
+| `browser_goal` | Hand the whole goal over: run the loop server-side through Jev — TypeSafe's own API, or OpenRouter's decisions route under `JEV_PROVIDER=openrouter` — or through Perplexity's `pplx-decider` under `JEV_PROVIDER=perplexity` (each needs that provider's key) |
 | `browser_request_help` | Hand one step to the person at the browser: front the tab, show a panel, block until they press "完成并交还控制权" / "取消请求", completion conditions hold, or the timeout. The agent decides when to call it (`skills/jev-ultrafast-mcp/references/help-and-recovery.md`); the server detects nothing on its own |
 | `browser_tabs` / `browser_sessions` / `browser_close` | Tab and session management |
 | `browser_doctor` | Browser binary, connection, which provider is paying, keys, policy envelope |

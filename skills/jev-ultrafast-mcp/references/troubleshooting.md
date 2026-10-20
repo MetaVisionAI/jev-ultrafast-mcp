@@ -43,6 +43,8 @@
 - **OpenRouter**（`JEV_PROVIDER=openrouter`）提供聊天接口，所以设置了 `OPENROUTER_API_KEY` 后，助手会继承 key *和* URL，
   唯一缺的是 `TEXT_MODEL`；`deepseek-chat` 不是 OpenRouter 的模型名。在 OpenRouter 上却提示要 `TEXT_MODEL_API_KEY`，
   只有两种可能：根本没有 key，或者设置了 `TEXT_MODEL_BASE_URL` 却没配它的 key，这会被当作显式指定的接口，不会借用决策模型的 key。
+- **Perplexity**（`JEV_PROVIDER=perplexity`）的 `pplx-decider` 和 Jev 自己的 API 一样只回答结构化问题，`PERPLEXITY_API_KEY`
+  不会借给助手。给助手单独配 `TEXT_MODEL_API_KEY` 加 `TEXT_MODEL`，或者改走 `JEV_PROVIDER=openrouter`。
 - 无论哪种，**key 和 URL 都来自同一个服务商。** 跨服务商借用 key 会得到一个 401，报错里点名的是你根本没调用的那家公司，
   这比原来的拒绝更难排查。`browser_doctor` 会报告解析出的服务商，以及助手是否有可用接口。
 
