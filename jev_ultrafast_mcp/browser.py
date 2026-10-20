@@ -284,6 +284,10 @@ class Session:
                 "url": info.get("url", ""),
                 "title": info.get("title", ""),
                 "active": info["targetId"] == self.target_id,
+                # `openerId` is the target that opened this one (`window.open`,
+                # `target=_blank`). A tab the user opened, or another session
+                # opened, has none, which is how a follower tells the two apart.
+                "opener": info.get("openerId") or "",
             })
         self.tabs = tabs
         return tabs
@@ -442,6 +446,52 @@ class Session:
         self._ensure_helper()
         self.last = None  # a fresh tab is a fresh observation context
         self._refresh_tabs()
+
+    def follow_new_tab(self, observation: Observation) -> dict | None:
+        """Switch to a tab the page we are driving just opened, and return it.
+
+        A click that uses `target=_blank` leaves this session on the page that
+        did the opening. Feishu's calendar entry is one: it goes out through a
+        safety redirect and the week view arrives in a new tab, while the
+        messenger page we clicked from does not change. The decision model has
+        no operation for switching tabs, so it reads "nothing happened" and
+        clicks the same control again. Each click opens another copy.
+
+        Following is a fact about the click, not a guess about the goal. The
+        tab whose `opener` is the page we are on is the one that click
+        produced; a tab the user opened, or another session opened, has a
+        different opener and is left alone. When this page opened several, the
+        last one is the latest click. The page we leave stays open -- the
+        messenger tab is still the user's -- we only stop driving it.
+
+        The new tab is often still on its interstitial (`security.feishu.cn/
+        link/safety?...`) when it first appears, so the wait here is what
+        makes the next read the page the link was for. Switching is progress
+        even though the page we left did not change, which is why the
+        no-change streak is cleared: that streak is about to call the goal
+        stuck for doing exactly the thing that worked.
+        """
+        opened = [
+            tab for tab in observation.new_tabs
+            if tab.get("opener") == self.target_id and tab.get("target_id")
+        ]
+        if not opened:
+            return None
+        chosen = opened[-1]
+        self.switch_tab(target_id=chosen["target_id"])
+        # An old `Page.loadEventFired` belongs to the page we just left. Left
+        # in the log it would convince `_wait_loaded` that the new tab had
+        # already arrived.
+        self.cdp.events.clear()
+        self._awaiting_idle = True
+        self._idle_deadline = time.monotonic() + self.cfg.settle_timeout
+        self._wait_loaded()
+        self._no_change_streak = 0
+        self._refresh_tabs()
+        return next(
+            (tab for tab in self.tabs if tab["target_id"] == chosen["target_id"]),
+            chosen,
+        )
 
     def _await_tab(self, *, exclude: str = "", timeout: float = 3.0) -> dict | None:
         """Wait for a tab that is not `exclude` to be attachable.

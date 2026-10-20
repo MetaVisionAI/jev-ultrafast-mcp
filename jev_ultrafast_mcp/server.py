@@ -156,14 +156,25 @@ def _first_read(tab) -> Observation:
     """
     observation = tab.observe()
     seen = {element.ref for element in observation.elements}
+    # A new tab is reported once, on the observation that first sees it. This
+    # read polls, so a later poll agrees with the one before it and the tab
+    # drops out of `new_tabs`. The caller follows after this returns, and it
+    # can only follow a tab that is still on the observation it is handed.
+    opened = list(observation.new_tabs)
+    opened_ids = {tab_info.get("target_id") for tab_info in opened}
     deadline = time.monotonic() + CONFIG.settle_timeout
     while time.monotonic() < deadline:
         time.sleep(CONFIG.settle_poll_ms / 1000.0)
         observation = tab.observe()
+        for tab_info in observation.new_tabs:
+            if tab_info.get("target_id") not in opened_ids:
+                opened.append(tab_info)
+                opened_ids.add(tab_info.get("target_id"))
         refs = {element.ref for element in observation.elements}
         if refs == seen and tab.page_is_idle():
             break
         seen = refs
+    observation.new_tabs = opened
     return observation
 
 
@@ -485,8 +496,21 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
         started = time.perf_counter()
         if url:
             tab.navigate(url)
+        # Captured before the first read, which replaces `last`. A tab the
+        # previous tool already reported is no longer "new" to that read, but
+        # it is still the page this goal should be driving.
+        pending = list(tab.last.new_tabs) if tab.last is not None else []
         observation = _first_read(tab)
         trace: list[str] = []
+        if pending:
+            seen_ids = {item.get("target_id") for item in observation.new_tabs}
+            observation.new_tabs = [
+                item for item in pending if item.get("target_id") not in seen_ids
+            ] + list(observation.new_tabs)
+        followed = tab.follow_new_tab(observation)
+        if followed:
+            trace.append(f"  ->  followed new tab {followed.get('url')}")
+            observation = _first_read(tab)
         status = "running"
         steps = 0
         stale = 0        # re-observations spent on the step currently in flight
@@ -567,6 +591,16 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
                 status = f"failed:{error}"
                 break
             observation = tab.last or tab.observe()
+            # A click that opens a tab does not change the page it was clicked
+            # on, so the no-change streak below would call it stuck and the
+            # model would click it again. Follow first: the new tab is the
+            # page the goal is now about, and a page that changed is not a
+            # page that is stuck.
+            followed = tab.follow_new_tab(observation)
+            if followed:
+                trace.append(f"  ->  followed new tab {followed.get('url')}")
+                observation = _first_read(tab)
+                continue
             # `act` already counts how long the page has stood still; the loop
             # used to drop that count on the floor and keep paying one decision
             # request per step until `max_steps`. Measured on a real daily

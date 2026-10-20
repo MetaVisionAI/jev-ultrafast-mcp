@@ -247,6 +247,11 @@ class _FakeSession:
         # "yes", which is what a session that did not navigate reports.
         self.idle: list[bool] = []
         self.idle_questions = 0
+        # The page the session is driving. `follow_new_tab` replaces it, which
+        # is what lets the next decision see the tab it just followed.
+        self.page = _observation()
+        self.target_id = "current"
+        self.followed: list[dict] = []
 
     def navigate(self, url: str) -> None:
         self.events.append(f"navigate {url}")
@@ -261,8 +266,30 @@ class _FakeSession:
 
     def observe(self, **_kwargs) -> Observation:
         self.events.append("observe")
-        self.last = _observation()
+        self.last = self.page
         return self.last
+
+    def follow_new_tab(self, observation: Observation) -> dict | None:
+        """The same rule as `Session.follow_new_tab`: only a tab this page opened.
+
+        Scripted by the observation the goal hands in, not by a side channel,
+        so a test that wants a follow has to put the tab on `new_tabs` with
+        this session's `target_id` as its opener. Anything else is declined,
+        which is the case the second test exists to pin.
+        """
+        opened = [
+            tab for tab in observation.new_tabs
+            if tab.get("opener") == self.target_id and tab.get("target_id")
+        ]
+        if not opened:
+            return None
+        chosen = opened[-1]
+        self.followed.append(chosen)
+        self._streak = 0
+        landed = chosen.get("observation")
+        if landed is not None:
+            self.page = landed
+        return chosen
 
     def evaluate_js(self, _expression: str):
         # A real session evaluates JS against the page. Refusing loudly here
@@ -285,6 +312,11 @@ class _FakeSession:
         changed = scripted.get("page_changed", True)
         self._streak = 0 if changed else self._streak + 1
         payload["page_changed"] = changed
+        # A click that opens a tab does not change the page it was clicked on.
+        # The goal reads `tab.last` for the follow, so the opened tab has to be
+        # on that observation or the loop never hears about it.
+        if scripted.get("new_tab"):
+            self.last = dataclasses.replace(self.page, new_tabs=[scripted["new_tab"]])
         if self._streak >= browser.NO_CHANGE_LIMIT:
             payload["stuck"] = (
                 f"{self._streak} consecutive actions changed nothing. "
@@ -369,6 +401,94 @@ def test_a_goal_without_a_url_runs_on_the_page_it_is_given(monkeypatch):
 
     assert session.events[0] == "observe", session.events[:3]
     assert not [e for e in session.events if e.startswith("navigate")], session.events[:3]
+
+
+def _drive_until(monkeypatch, session: _FakeSession, choose):
+    """Run a goal whose next action depends on the page it is looking at."""
+    monkeypatch.setattr(server.policy, "available", lambda _cfg: True)
+    monkeypatch.setattr(server.policy, "choose", choose)
+    monkeypatch.setattr(server, "_session", lambda _name: session)
+    return server.browser_goal("open the calendar", max_steps=6, verbose=True)
+
+
+def _click_until_calendar(_cfg, observation, _goal, _history):
+    """Click the same control while still on the page that has not moved."""
+    if observation.url.endswith("/calendar/week"):
+        return {"operation": "DONE", "ref": None, "confidence": 0.9}
+    return _click()
+
+
+def test_a_goal_follows_a_tab_the_page_just_opened(monkeypatch):
+    """One click, one new tab, and the next decision is about that tab.
+
+    The page that was clicked does not change -- the week view arrives
+    somewhere else -- so without the follow the same control is clicked until
+    the no-change streak calls the goal stuck, and every click opens another
+    copy. Following is what stops the second click.
+    """
+    calendar = dataclasses.replace(_observation(), url="https://feishu.test/calendar/week",
+                                   title="本周")
+    session = _FakeSession([])
+    opened = {
+        "target_id": "cal",
+        "url": calendar.url,
+        "opener": session.target_id,
+        "observation": calendar,
+    }
+    session._act = [{**_still(), "new_tab": opened}] + [_still()] * 5
+
+    out = _drive_until(monkeypatch, session, _click_until_calendar)
+
+    assert len(session.acts) == 1, session.acts
+    assert [tab["target_id"] for tab in session.followed] == ["cal"]
+    assert "followed new tab https://feishu.test/calendar/week" in out, out
+    assert "stopped: no progress" not in out, out
+    assert "status: done" in out, out
+
+
+def test_a_goal_follows_a_tab_the_previous_read_already_reported(monkeypatch):
+    """A tab reported before the goal starts is still the page to drive.
+
+    `new_tabs` is a diff, and the read that reported it already consumed the
+    diff. The first read of this goal would otherwise agree with itself and
+    hand the model the page that did the opening, which is how the same
+    control gets clicked again.
+    """
+    calendar = dataclasses.replace(_observation(), url="https://feishu.test/calendar/week",
+                                   title="本周")
+    session = _FakeSession([])
+    session.last = dataclasses.replace(_observation(), new_tabs=[{
+        "target_id": "cal",
+        "url": calendar.url,
+        "opener": session.target_id,
+        "observation": calendar,
+    }])
+
+    out = _drive_until(monkeypatch, session, _click_until_calendar)
+
+    assert session.acts == [], session.acts
+    assert [tab["target_id"] for tab in session.followed] == ["cal"]
+    assert "followed new tab https://feishu.test/calendar/week" in out, out
+    assert "status: done" in out, out
+
+
+def test_a_goal_does_not_follow_a_tab_it_did_not_open(monkeypatch):
+    """A tab whose opener is some other page is the user's, not this click's.
+
+    Declining it leaves the goal on the page that did not change, and that
+    page then goes stuck the way any page that ignores its clicks does. The
+    point of the assertion is the absence: no follow, and no second calendar.
+    """
+    session = _FakeSession([])
+    foreign = {"target_id": "other", "url": "https://github.com/pulls", "opener": "someone-else"}
+    session._act = [{**_still(), "new_tab": foreign}] + [_still()] * 5
+
+    out = _drive_until(monkeypatch, session, _click_until_calendar)
+
+    assert session.followed == [], session.followed
+    assert "followed new tab" not in out, out
+    assert "stopped: no progress" in out, out
+    assert len(session.acts) == browser.NO_CHANGE_LIMIT, session.acts
 
 
 def test_a_stale_ref_does_not_spend_the_next_step_s_budget(monkeypatch):
@@ -750,3 +870,100 @@ def test_a_goal_that_never_reached_the_model_reports_no_cost(monkeypatch):
 
     assert "turbo_unavailable" in out, out
     assert "turbo: " not in out, out
+
+
+# ------------------------------------------------- which new tab gets followed
+
+
+def _page(target_id: str, url: str, opener: str = "") -> dict:
+    return {"targetId": target_id, "type": "page", "url": url, "title": target_id,
+            "openerId": opener}
+
+
+class _TargetList:
+    """The CDP calls `follow_new_tab` makes, and no others that matter.
+
+    `document.readyState` answers "complete" so the wait after a switch returns
+    at once; the helper version answers the current one so the page is not
+    asked to install it. Neither is what the test is about.
+    """
+
+    def __init__(self, infos: list[dict]) -> None:
+        self.infos = infos
+        self.events: list[dict] = []
+        self.closed: list[str] = []
+
+    def call(self, method: str, timeout: float | None = None, session_id: str | None = None,
+             **params: object) -> dict:
+        if method == "Target.createTarget":
+            return {"targetId": "messenger"}
+        if method == "Target.attachToTarget":
+            return {"sessionId": "s-" + str(params["targetId"])}
+        if method == "Target.getTargets":
+            return {"targetInfos": self.infos}
+        if method == "Target.closeTarget":
+            self.closed.append(str(params.get("targetId")))
+        return {}
+
+    def evaluate(self, expression: str, session_id: str | None = None, **kwargs: object):
+        if expression == "document.readyState":
+            return "complete"
+        if "__jevMcp" in expression:
+            return browser.HELPER_VERSION
+        return None
+
+
+def _driving(infos: list[dict]) -> tuple[browser.Session, _TargetList]:
+    driver = _TargetList(infos)
+    session = browser.Session("test", Config(), driver)
+    session.start()
+    return session, driver
+
+
+def _tabs_of(session: browser.Session) -> dict[str, dict]:
+    return {tab["target_id"]: tab for tab in session._refresh_tabs()}
+
+
+def test_opener_id_is_what_says_which_tab_this_page_opened():
+    """The latest tab this page opened is the one to drive; the rest are not.
+
+    `openerId` is the only thing that distinguishes them. Taking the last new
+    tab regardless would follow a tab the user opened a moment later, and
+    taking the first would follow a calendar the previous click already
+    opened instead of the one this click just did. The page we leave is not
+    closed: it is still the user's.
+    """
+    session, driver = _driving([
+        _page("messenger", "https://feishu.test/next/messenger/"),
+        _page("user-tab", "https://github.com/pulls"),
+        _page("cal-1", "https://feishu.test/calendar/week", opener="messenger"),
+        _page("cal-2", "https://security.feishu.cn/link/safety", opener="messenger"),
+        _page("foreign", "https://feishu.test/calendar/week", opener="not-us"),
+    ])
+    tabs = _tabs_of(session)
+    assert tabs["cal-2"]["opener"] == "messenger"
+    assert tabs["user-tab"]["opener"] == ""
+    session._no_change_streak = browser.NO_CHANGE_LIMIT
+
+    # `foreign` is last on purpose: a follower that ignores the opener takes it.
+    followed = session.follow_new_tab(dataclasses.replace(
+        _observation(), new_tabs=[tabs["cal-1"], tabs["user-tab"], tabs["cal-2"], tabs["foreign"]]
+    ))
+
+    assert followed is not None
+    assert followed["target_id"] == "cal-2"
+    assert session.target_id == "cal-2"
+    assert session._no_change_streak == 0
+    assert driver.closed == []
+
+
+def test_a_tab_this_page_did_not_open_is_not_followed():
+    """No matching opener means there is nothing to follow, not a tab to guess at."""
+    session, _driver = _driving([
+        _page("messenger", "https://feishu.test/next/messenger/"),
+        _page("user-tab", "https://github.com/pulls"),
+    ])
+    tabs = _tabs_of(session)
+
+    assert session.follow_new_tab(dataclasses.replace(_observation(), new_tabs=[tabs["user-tab"]])) is None
+    assert session.target_id == "messenger"

@@ -231,6 +231,13 @@ optional.
 
 ## Operational gotchas that waste a run
 
+- **`browser_goal` follows a tab the current page just opened.** A click that uses
+  `target=_blank` (Feishu's calendar entry is one) used to leave the goal on the
+  page that did the opening, so the model clicked it again and opened another tab
+  each time. The goal now switches to that tab and keeps driving there; the page
+  it left stays open. `browser_act` still only reports the new tab (`NEW TAB
+  opened: …`) and leaves the switch to you: `browser_tabs` with `action=switch`
+  and that tab's `target_id`.
 - **The page must be in a foreground tab.** A backgrounded tab is throttled by
   Chrome, and a bot check (Cloudflare's "Just a moment…") then never clears — it
   will sit there for the full timeout while the Ray ID changes every attempt.

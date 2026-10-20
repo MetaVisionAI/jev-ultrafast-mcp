@@ -273,6 +273,17 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **`browser_goal` follows a tab the page it is driving just opened.** A click with `target=_blank`
+  (Feishu's calendar entry is one: it leaves through `security.feishu.cn/link/safety` and the week
+  view arrives in a new tab) does not change the page it was clicked on. The goal could see the new
+  tab — `observe` already reported `NEW TAB opened` — but the decision model has no switch operation,
+  so it read "nothing happened" and clicked the same control again. Each click opened another copy,
+  until the no-change streak called the run stuck. The goal now switches to a new tab whose opener is
+  the page it is on (the latest, when that page opened several), waits out the interstitial, and keeps
+  driving there. The page it leaves stays open. A tab the user opened, or another session opened, has
+  a different opener and is not followed. `browser_act` still only reports the new tab; the switch
+  stays the caller's, through `browser_tabs`.
+
 - **`toggle` clicks, and the confirmation rail was attached to the op named `click`.** `_do_click` has
   exactly two callers and only one of them consulted `confirm_reason`, so
   `{"op": "toggle", "ref": <a button named "Delete account">}` pressed it with no question asked. This
