@@ -13,6 +13,7 @@ hundred bytes on the wire instead of a full guard table.
 from __future__ import annotations
 
 import json
+import subprocess
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -1541,15 +1542,12 @@ class BrowserManager:
         if self.cfg.mode == "attach":
             if not self.cfg.cdp_url:
                 raise ChromeLaunchError("JEVMCP_CDP_URL is required when JEVMCP_MODE=attach")
-            self._cdp = attach_chrome(
-                self.cfg.cdp_url,
-                timeout=self.cfg.call_timeout,
-                data_dirs=self.cfg.attach_data_dirs(),
-                # Chrome asks the user to approve a new debugging client. The
-                # handshake waits on that click, so it gets a human-sized budget
-                # rather than the call timeout.
-                open_timeout=max(60.0, self.cfg.call_timeout),
-            )
+            try:
+                self._cdp = self._attach()
+            except ChromeLaunchError:
+                if not self.cfg.attach_launch:
+                    raise
+                self._cdp = self._launch_then_attach()
             return
         if (self._process is not None and self._process.poll() is None
                 and self._profile is not None):
@@ -1557,6 +1555,47 @@ class BrowserManager:
             return
         self._cdp, self._process, self._profile = launch_chrome(
             self.cfg, allow_extensions=self.allow_extensions)
+
+    def _attach(self) -> Cdp:
+        return attach_chrome(
+            self.cfg.cdp_url,
+            timeout=self.cfg.call_timeout,
+            data_dirs=self.cfg.attach_data_dirs(),
+            # Chrome asks the user to approve a new debugging client. The
+            # handshake waits on that click, so it gets a human-sized budget
+            # rather than the call timeout.
+            open_timeout=max(60.0, self.cfg.call_timeout),
+        )
+
+    def _launch_then_attach(self) -> Cdp:
+        """Start the browser with the configured command, then attach to it.
+
+        The browser stays the host's, not ours: `owns_browser` is still False, so
+        shutdown detaches. Output goes to /dev/null because stdout here is the
+        MCP transport.
+        """
+        command = self.cfg.attach_launch
+        deadline = time.monotonic() + self.cfg.attach_launch_timeout
+        try:
+            subprocess.run(
+                command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, timeout=self.cfg.attach_launch_timeout,
+                check=False)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise ChromeLaunchError(
+                f"JEVMCP_ATTACH_LAUNCH_COMMAND failed to run ({exc}).") from exc
+        last: ChromeLaunchError | None = None
+        while True:
+            try:
+                return self._attach()
+            except ChromeLaunchError as exc:
+                last = exc
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.5)
+        raise ChromeLaunchError(
+            f"Ran JEVMCP_ATTACH_LAUNCH_COMMAND but nothing answered at {self.cfg.cdp_url} "
+            f"within {self.cfg.attach_launch_timeout:g}s. {last}")
 
     def session(self, name: str = "default") -> Session:
         # `self.cdp` is what drops a dead socket and the sessions bound to it.

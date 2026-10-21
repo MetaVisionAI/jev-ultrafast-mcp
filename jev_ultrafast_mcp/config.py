@@ -18,6 +18,7 @@ unaffected.
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import sys
 from dataclasses import dataclass, field
@@ -320,6 +321,11 @@ class Config:
     sandbox: str = "auto"                 # auto | on | off
     profile_dir: Path | None = None
     attach_profile_dir: Path | None = None  # data dir of the browser we attach to
+    # Run when attach finds nothing listening, then attach again. For hosts where
+    # the browser exists but is started on demand by someone else's launcher; its
+    # flags (debugging port, profile) stay that launcher's business, not ours.
+    attach_launch: list[str] = field(default_factory=list)
+    attach_launch_timeout: float = 30.0
     # None means the page fills the window. A pair locks the layout viewport to
     # those CSS pixels, which is what a headless browser needs and what an
     # explicit JEVMCP_WINDOW=1280x860 asks for.
@@ -379,6 +385,8 @@ class Config:
             attach_profile_dir=(
                 Path(attach_profile).expanduser() if attach_profile else None
             ),
+            attach_launch=shlex.split(os.environ.get("JEVMCP_ATTACH_LAUNCH_COMMAND", "")),
+            attach_launch_timeout=float(os.environ.get("JEVMCP_ATTACH_LAUNCH_TIMEOUT", "30")),
             window=parse_window(os.environ.get("JEVMCP_WINDOW"), headless=headless, mode=mode),
             max_actions=int(os.environ.get("JEVMCP_MAX_ACTIONS", "250")),
             max_text=int(os.environ.get("JEVMCP_MAX_TEXT", "6000")),

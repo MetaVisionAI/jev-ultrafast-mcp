@@ -619,6 +619,7 @@ decisions 路由）。给了 `verify` 检查时返回 `verified: PASS/FAIL`。
 | 否 | `JEVMCP_MODE` | `launch` | `launch` 自己启动，或 `attach` 到已运行的 CDP |
 | 否 | `JEVMCP_CDP_URL` | — | `mode=attach` 时填 `http://127.0.0.1:9222`；也可以直接给 `ws://` 地址跳过发现步骤 |
 | 否 | `JEVMCP_ATTACH_PROFILE_DIR` | *(各浏览器默认位置)* | 被 attach 的那个浏览器的 data 目录；自动找不到 `DevToolsActivePort` 时用 |
+| 否 | `JEVMCP_ATTACH_LAUNCH_COMMAND` | — | attach 时端口上没有浏览器就执行这条命令，之后在 `JEVMCP_ATTACH_LAUNCH_TIMEOUT` 秒内（默认 30）重试连接 |
 | 否 | `JEVMCP_HEADLESS` | `1` | `0` 显示窗口 |
 | 否 | `JEVMCP_FOREGROUND` | `0` | `1` 激活自有标签页 |
 | 否 | `JEVMCP_SANDBOX` | `auto` | 浏览器启动即崩时，`auto` 会用 `--no-sandbox` 重试 |

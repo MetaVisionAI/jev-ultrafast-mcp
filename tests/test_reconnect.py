@@ -175,8 +175,8 @@ def test_the_rebuild_does_not_cost_a_second_handshake_when_one_is_unnecessary() 
     """
     import inspect
 
-    source = inspect.getsource(browser_module.BrowserManager._connect)
-    assert "open_timeout=" in source
+    assert "self._attach()" in inspect.getsource(browser_module.BrowserManager._connect)
+    assert "open_timeout=" in inspect.getsource(browser_module.BrowserManager._attach)
 
 
 # --- launch mode adopts its own browser instead of starting another ----------

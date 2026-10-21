@@ -8,6 +8,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Attach mode can start a browser that is launched on demand.** `JEVMCP_ATTACH_LAUNCH_COMMAND`
+  names a command to run when nothing answers at `JEVMCP_CDP_URL`; the server runs it once, then
+  retries the attach until `JEVMCP_ATTACH_LAUNCH_TIMEOUT` (30 s) runs out. The command owns the
+  browser's flags, so a sandbox whose Chrome is started lazily by its own launcher can be attached
+  to without a second launch path. The browser stays the host's: shutdown still only detaches.
 - **Feishu controls are recognized from the component vocabulary, not from a list of widgets.**
   The calendar, messenger and event editor paint buttons, menus and day cells as plain `div`s
   (`larkc-*`, `_trigger` / `_selection` / `_option`, a portal). The Feishu strategy now collects the
