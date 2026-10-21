@@ -103,6 +103,63 @@ def test_browser_close_still_reports_stopping_what_it_started(monkeypatch) -> No
     )
 
 
+def _refuse_then_answer(monkeypatch, refusals: int) -> list[int]:
+    """Make `attach_chrome` refuse `refusals` times before handing back a socket."""
+    attempts: list[int] = []
+
+    def fake_attach(*_args, **_kwargs):
+        attempts.append(1)
+        if len(attempts) <= refusals:
+            raise cdp.ChromeLaunchError("nothing is listening")
+        return FakeCdp()
+
+    monkeypatch.setattr("jev_ultrafast_mcp.browser.attach_chrome", fake_attach)
+    monkeypatch.setattr("jev_ultrafast_mcp.browser.time.sleep", lambda _s: None)
+    return attempts
+
+
+def test_attach_runs_the_launch_command_when_nothing_is_listening(
+    monkeypatch, tmp_path,
+) -> None:
+    marker = tmp_path / "launched"
+    attempts = _refuse_then_answer(monkeypatch, refusals=2)
+    manager = BrowserManager(Config(
+        mode="attach", cdp_url="http://127.0.0.1:9222",
+        attach_launch=["touch", str(marker)], attach_launch_timeout=5))
+
+    manager._connect()
+
+    assert marker.exists(), "the launch command never ran"
+    assert len(attempts) == 3
+    assert manager.owns_browser is False, "a host-launched browser became ours to stop"
+
+
+def test_attach_without_a_launch_command_still_fails_fast(monkeypatch) -> None:
+    attempts = _refuse_then_answer(monkeypatch, refusals=99)
+    manager = BrowserManager(Config(mode="attach", cdp_url="http://127.0.0.1:9222"))
+
+    with pytest.raises(cdp.ChromeLaunchError):
+        manager._connect()
+    assert len(attempts) == 1
+
+
+def test_attach_launch_gives_up_at_the_deadline(monkeypatch) -> None:
+    _refuse_then_answer(monkeypatch, refusals=99)
+    manager = BrowserManager(Config(
+        mode="attach", cdp_url="http://127.0.0.1:9222",
+        attach_launch=["true"], attach_launch_timeout=0))
+
+    with pytest.raises(cdp.ChromeLaunchError, match="JEVMCP_ATTACH_LAUNCH_COMMAND"):
+        manager._connect()
+
+
+def test_attach_launch_command_is_read_from_the_environment(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "JEVMCP_ATTACH_LAUNCH_COMMAND", "/opt/py/bin/python -m pkg.chrome --launch-only")
+    assert Config.from_env().attach_launch == [
+        "/opt/py/bin/python", "-m", "pkg.chrome", "--launch-only"]
+
+
 def test_doctor_hint_does_not_promise_to_launch_in_attach_mode(monkeypatch) -> None:
     manager = BrowserManager(Config(mode="attach", cdp_url="http://127.0.0.1:9222"))
     monkeypatch.setattr(server, "MANAGER", manager)

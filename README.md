@@ -674,6 +674,7 @@ All optional; the defaults are the point.
 | No | `JEVMCP_MODE` | `launch` | `launch` a browser, or `attach` to a running CDP endpoint |
 | No | `JEVMCP_CDP_URL` | — | `http://127.0.0.1:9222` when `mode=attach`, or a `ws://` URL to skip discovery |
 | No | `JEVMCP_ATTACH_PROFILE_DIR` | *(browser defaults)* | data directory of the browser being attached to, if `DevToolsActivePort` is not found automatically |
+| No | `JEVMCP_ATTACH_LAUNCH_COMMAND` | — | command run when attach finds nothing listening; the attach is then retried for `JEVMCP_ATTACH_LAUNCH_TIMEOUT` seconds (default 30) |
 | No | `JEVMCP_HEADLESS` | `1` | `0` for a visible window |
 | No | `JEVMCP_FOREGROUND` | `0` | `1` activates the owned tab |
 | No | `JEVMCP_SANDBOX` | `auto` | `auto` retries with `--no-sandbox` if the browser aborts on startup |
